@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"crowdbeats/internal/domain/room"
+	"crowdbeats/internal/domain/session"
 
 	"github.com/google/uuid"
 )
@@ -34,6 +35,17 @@ func (r *RoomRepository) GetByID(ctx context.Context, roomID uuid.UUID) (room.Ro
 	return out, err
 }
 
+func (r *RoomRepository) GetByIDForUpdate(ctx context.Context, roomID uuid.UUID) (room.Room, error) {
+	var out room.Room
+	err := r.q.QueryRow(ctx, `
+		select id, name, slug, status, queue_limit, max_votes_per_user, qr_ttl_seconds, recalc_interval_seconds, manager_secret_hash, created_at, updated_at
+		from rooms where id = $1 for update
+	`, roomID).Scan(
+		&out.ID, &out.Name, &out.Slug, &out.Status, &out.QueueLimit, &out.MaxVotesPerUser, &out.QRTTLSeconds, &out.RecalcIntervalSeconds, &out.ManagerSecretHash, &out.CreatedAt, &out.UpdatedAt,
+	)
+	return out, err
+}
+
 func (r *RoomRepository) GetByQRCode(ctx context.Context, code string) (room.Room, error) {
 	var out room.Room
 	err := r.q.QueryRow(ctx, `
@@ -47,7 +59,13 @@ func (r *RoomRepository) GetByQRCode(ctx context.Context, code string) (room.Roo
 	return out, err
 }
 
-func (r *RoomRepository) CreateQRCode(ctx context.Context, roomID uuid.UUID, code string, expiresAt time.Time) error {
+func (r *RoomRepository) RotateQRCode(ctx context.Context, roomID uuid.UUID, code string, expiresAt time.Time) error {
+	if _, err := r.q.Exec(ctx, `
+		update room_qr_codes set revoked = true
+		where room_id = $1 and revoked = false and expires_at > now()
+	`, roomID); err != nil {
+		return err
+	}
 	_, err := r.q.Exec(ctx, `insert into room_qr_codes (room_id, code, expires_at) values ($1, $2, $3)`, roomID, code, expiresAt)
 	return err
 }
@@ -71,10 +89,10 @@ func (r *RoomRepository) LoadStats(ctx context.Context, roomID uuid.UUID) (room.
 	var stats room.Stats
 	if err := r.q.QueryRow(ctx, `
 		select
-			(select count(*) from user_sessions where room_id = $1 and status = 'active'),
+			(select count(*) from user_sessions where room_id = $1 and status = 'active' and last_seen_at >= now() - ($2::int * interval '1 second')),
 			(select count(*) from room_tracks where room_id = $1 and status in ('queued','playing')),
 			(select count(*) from votes where room_id = $1)
-	`, roomID).Scan(&stats.ActiveUsers, &stats.TracksInQueue, &stats.VotesCount); err != nil {
+	`, roomID, session.PresenceWindowSeconds).Scan(&stats.ActiveUsers, &stats.TracksInQueue, &stats.VotesCount); err != nil {
 		return stats, err
 	}
 	rows, err := r.q.Query(ctx, `
@@ -103,6 +121,9 @@ func (r *RoomRepository) LoadStats(ctx context.Context, roomID uuid.UUID) (room.
 
 func (r *RoomRepository) CountActiveUsers(ctx context.Context, roomID uuid.UUID) (int, error) {
 	var count int
-	err := r.q.QueryRow(ctx, `select count(*) from user_sessions where room_id = $1 and status = 'active'`, roomID).Scan(&count)
+	err := r.q.QueryRow(ctx, `
+		select count(*) from user_sessions
+		where room_id = $1 and status = 'active' and last_seen_at >= now() - ($2::int * interval '1 second')
+	`, roomID, session.PresenceWindowSeconds).Scan(&count)
 	return count, err
 }

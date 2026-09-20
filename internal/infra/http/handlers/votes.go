@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
+	"crowdbeats/internal/infra/http/dto"
 	"crowdbeats/internal/infra/http/middleware"
 
 	"github.com/google/uuid"
@@ -11,7 +11,7 @@ import (
 
 func (h *Handler) AddVote(w http.ResponseWriter, r *http.Request) {
 	current := middleware.SessionFromContext(r.Context())
-	roomID, err := uuid.Parse(r.PathValue("roomID"))
+	roomID, err := middleware.ParseID(r.PathValue("roomID"), "room")
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
@@ -19,7 +19,7 @@ func (h *Handler) AddVote(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RoomTrackID uuid.UUID `json:"room_track_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := middleware.DecodeJSON(r, &req, false); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
@@ -28,5 +28,5 @@ func (h *Handler) AddVote(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, response)
+	middleware.WriteJSON(w, http.StatusOK, dto.VoteFromResult(response))
 }

@@ -6,6 +6,7 @@ import (
 	"crowdbeats/internal/domain/session"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type SessionRepository struct{ q Querier }
@@ -16,6 +17,15 @@ func (r *SessionRepository) GetByTokenHash(ctx context.Context, hash string) (se
 		select id, room_id, nickname, role, status, session_token_hash, last_seen_at
 		from user_sessions
 		where session_token_hash = $1
+	`, hash).Scan(&out.ID, &out.RoomID, &out.Nickname, &out.Role, &out.Status, &out.SessionTokenHash, &out.LastSeenAt)
+	return out, err
+}
+
+func (r *SessionRepository) GetByTokenHashForUpdate(ctx context.Context, hash string) (session.Session, error) {
+	var out session.Session
+	err := r.q.QueryRow(ctx, `
+		select id, room_id, nickname, role, status, session_token_hash, last_seen_at
+		from user_sessions where session_token_hash = $1 for update
 	`, hash).Scan(&out.ID, &out.RoomID, &out.Nickname, &out.Role, &out.Status, &out.SessionTokenHash, &out.LastSeenAt)
 	return out, err
 }
@@ -32,19 +42,23 @@ func (r *SessionRepository) Create(ctx context.Context, input session.CreateInpu
 	return out, err
 }
 
-func (r *SessionRepository) Reattach(ctx context.Context, sessionID uuid.UUID, roomID uuid.UUID, nickname string) error {
-	_, err := r.q.Exec(ctx, `
+func (r *SessionRepository) ReattachSameRoom(ctx context.Context, sessionID uuid.UUID, roomID uuid.UUID, nickname string) error {
+	tag, err := r.q.Exec(ctx, `
 		update user_sessions
-		set room_id = $2,
-		    nickname = $3,
+		set nickname = $3,
 		    role = 'guest',
 		    status = 'active',
-		    joined_at = now(),
 		    last_seen_at = now(),
 		    left_at = null
-		where id = $1
+		where id = $1 and room_id = $2
 	`, sessionID, roomID, nickname)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (r *SessionRepository) GetByIDForUpdate(ctx context.Context, sessionID uuid.UUID) (session.Session, error) {
@@ -59,8 +73,14 @@ func (r *SessionRepository) GetByIDForUpdate(ctx context.Context, sessionID uuid
 }
 
 func (r *SessionRepository) Heartbeat(ctx context.Context, sessionID uuid.UUID) error {
-	_, err := r.q.Exec(ctx, `update user_sessions set last_seen_at = now(), status = 'active' where id = $1`, sessionID)
-	return err
+	tag, err := r.q.Exec(ctx, `update user_sessions set last_seen_at = now() where id = $1 and status = 'active'`, sessionID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (r *SessionRepository) Leave(ctx context.Context, sessionID uuid.UUID) error {

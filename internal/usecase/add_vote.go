@@ -2,21 +2,34 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
+	"crowdbeats/internal/domain/room"
 	"crowdbeats/internal/domain/session"
 	"crowdbeats/internal/domain/track"
 	"crowdbeats/pkg/apierror"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
-func (s *Services) AddVote(ctx context.Context, roomID uuid.UUID, current session.Session, roomTrackID uuid.UUID) (map[string]any, error) {
-	var response map[string]any
+type AddVoteResult struct {
+	VoteAdded        bool
+	RoomTrackID      uuid.UUID
+	CurrentVoteCount int
+	VotesRemaining   int
+}
+
+func (s *Services) AddVote(ctx context.Context, roomID uuid.UUID, current session.Session, roomTrackID uuid.UUID) (AddVoteResult, error) {
+	var response AddVoteResult
 	err := s.UOW.Run(ctx, func(repos RepositorySet) error {
-		targetRoom, err := repos.Rooms().GetByID(ctx, roomID)
+		targetRoom, err := repos.Rooms().GetByIDForUpdate(ctx, roomID)
 		if err != nil {
 			return err
+		}
+		if targetRoom.Status != room.StatusActive {
+			return apierror.New("ROOM_NOT_ACTIVE", "room is not active", http.StatusForbidden)
 		}
 		lockedSession, err := repos.Sessions().GetByIDForUpdate(ctx, current.ID)
 		if err != nil {
@@ -28,10 +41,20 @@ func (s *Services) AddVote(ctx context.Context, roomID uuid.UUID, current sessio
 
 		targetTrack, err := repos.Tracks().GetByIDForUpdate(ctx, roomTrackID)
 		if err != nil {
-			return apierror.New("ROOM_TRACK_NOT_ACTIVE", "track not found", http.StatusNotFound)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return apierror.New("ROOM_TRACK_NOT_ACTIVE", "track not found", http.StatusNotFound)
+			}
+			return err
 		}
 		if targetTrack.RoomID != roomID || (targetTrack.Status != track.StatusQueued && targetTrack.Status != track.StatusPlaying) {
 			return apierror.New("ROOM_TRACK_NOT_ACTIVE", "track is not active", http.StatusConflict)
+		}
+		alreadyVoted, err := repos.Votes().HasBySessionAndTrack(ctx, current.ID, roomTrackID)
+		if err != nil {
+			return err
+		}
+		if alreadyVoted {
+			return apierror.New("ALREADY_VOTED_FOR_TRACK", "track already voted by this session", http.StatusConflict)
 		}
 
 		usedVotes, err := repos.Votes().CountBySessionInRoom(ctx, roomID, current.ID)
@@ -55,11 +78,10 @@ func (s *Services) AddVote(ctx context.Context, roomID uuid.UUID, current sessio
 		}
 
 		currentVoteCount := targetTrack.VoteCountCached + 1
-		response = map[string]any{
-			"vote_added":         true,
-			"room_track_id":      roomTrackID,
-			"current_vote_count": currentVoteCount,
-			"votes_remaining":    targetRoom.MaxVotesPerUser - usedVotes - 1,
+		response = AddVoteResult{
+			VoteAdded: true, RoomTrackID: roomTrackID,
+			CurrentVoteCount: currentVoteCount,
+			VotesRemaining:   targetRoom.MaxVotesPerUser - usedVotes - 1,
 		}
 		s.DirtyRooms.Mark(roomID)
 		s.Broadcaster.Broadcast(LiveEvent{

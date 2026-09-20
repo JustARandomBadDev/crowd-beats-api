@@ -3,15 +3,12 @@ package spotify
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"crowdbeats/internal/domain/spotify"
 	domainspotify "crowdbeats/internal/domain/spotify"
 )
 
@@ -25,13 +22,13 @@ type Config struct {
 type Client struct {
 	cfg        Config
 	httpClient *http.Client
-	local      spotify.Repository
+	local      domainspotify.Repository
 	mu         sync.Mutex
 	token      string
 	expiresAt  time.Time
 }
 
-func NewClient(cfg Config, local spotify.Repository) *Client {
+func NewClient(cfg Config, local domainspotify.Repository) *Client {
 	return &Client{
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
@@ -49,17 +46,16 @@ func (c *Client) SearchTracks(ctx context.Context, query string) ([]domainspotif
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIBase+"/search?type=track&limit=10&q="+url.QueryEscape(query), nil)
 	if err != nil {
-		return nil, err
+		return nil, &domainspotify.ProviderError{Cause: err}
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &domainspotify.ProviderError{Cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("spotify search status %d: %s", resp.StatusCode, string(body))
+		return nil, &domainspotify.ProviderError{StatusCode: resp.StatusCode}
 	}
 	var payload struct {
 		Tracks struct {
@@ -67,7 +63,7 @@ func (c *Client) SearchTracks(ctx context.Context, query string) ([]domainspotif
 		} `json:"tracks"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, err
+		return nil, &domainspotify.ProviderError{Cause: err}
 	}
 	out := make([]domainspotify.Track, 0, len(payload.Tracks.Items))
 	for _, item := range payload.Tracks.Items {
@@ -80,7 +76,7 @@ func (c *Client) GetTrack(ctx context.Context, spotifyTrackID string) (domainspo
 	if c.cfg.ClientID == "" || c.cfg.Secret == "" {
 		_, track, err := c.local.GetBySpotifyID(ctx, spotifyTrackID)
 		if err != nil {
-			return domainspotify.Track{}, fmt.Errorf("spotify credentials missing and track not cached locally")
+			return domainspotify.Track{}, &domainspotify.ProviderError{Cause: err}
 		}
 		return track, nil
 	}
@@ -90,21 +86,20 @@ func (c *Client) GetTrack(ctx context.Context, spotifyTrackID string) (domainspo
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIBase+"/tracks/"+spotifyTrackID, nil)
 	if err != nil {
-		return domainspotify.Track{}, err
+		return domainspotify.Track{}, &domainspotify.ProviderError{Cause: err}
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return domainspotify.Track{}, err
+		return domainspotify.Track{}, &domainspotify.ProviderError{Cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return domainspotify.Track{}, fmt.Errorf("spotify track status %d: %s", resp.StatusCode, string(body))
+		return domainspotify.Track{}, &domainspotify.ProviderError{StatusCode: resp.StatusCode}
 	}
 	var item spotifyTrackResponse
 	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
-		return domainspotify.Track{}, err
+		return domainspotify.Track{}, &domainspotify.ProviderError{Cause: err}
 	}
 	return toDomainTrack(item), nil
 }
@@ -117,25 +112,24 @@ func (c *Client) tokenValue(ctx context.Context) (string, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.TokenURL, strings.NewReader("grant_type=client_credentials"))
 	if err != nil {
-		return "", err
+		return "", &domainspotify.ProviderError{Cause: err}
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(c.cfg.ClientID, c.cfg.Secret)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", &domainspotify.ProviderError{Cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("spotify token status %d: %s", resp.StatusCode, string(body))
+		return "", &domainspotify.ProviderError{StatusCode: resp.StatusCode}
 	}
 	var payload struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
+		return "", &domainspotify.ProviderError{Cause: err}
 	}
 	c.token = payload.AccessToken
 	c.expiresAt = time.Now().UTC().Add(time.Duration(payload.ExpiresIn) * time.Second)

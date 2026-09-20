@@ -16,6 +16,7 @@ type Item struct {
 	Title          string
 	ArtistNames    string
 	AlbumName      string
+	DurationMS     int
 	ImageURL       string
 	PreviewURL     string
 	URI            string

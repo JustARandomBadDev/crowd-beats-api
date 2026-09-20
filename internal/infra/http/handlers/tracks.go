@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"crowdbeats/internal/domain/track"
+	"crowdbeats/internal/infra/http/dto"
 	"crowdbeats/internal/infra/http/middleware"
 
 	"github.com/google/uuid"
@@ -12,7 +12,7 @@ import (
 
 func (h *Handler) CreateTrack(w http.ResponseWriter, r *http.Request) {
 	current := middleware.SessionFromContext(r.Context())
-	roomID, err := uuid.Parse(r.PathValue("roomID"))
+	roomID, err := middleware.ParseID(r.PathValue("roomID"), "room")
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
@@ -20,7 +20,7 @@ func (h *Handler) CreateTrack(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SpotifyTrackID string `json:"spotify_track_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := middleware.DecodeJSON(r, &req, false); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
@@ -29,16 +29,16 @@ func (h *Handler) CreateTrack(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, status, response)
+	middleware.WriteJSON(w, status, dto.ProposeTrackFromResult(response))
 }
 
 func (h *Handler) DeleteTrack(w http.ResponseWriter, r *http.Request) {
-	roomID, err := uuid.Parse(r.PathValue("roomID"))
+	roomID, err := middleware.ParseID(r.PathValue("roomID"), "room")
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
-	roomTrackID, err := uuid.Parse(r.PathValue("roomTrackID"))
+	roomTrackID, err := middleware.ParseID(r.PathValue("roomTrackID"), "room track")
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
@@ -47,7 +47,7 @@ func (h *Handler) DeleteTrack(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, map[string]any{"deleted": true, "room_track_id": roomTrackID})
+	middleware.WriteJSON(w, http.StatusOK, dto.DeleteTrackResponse{Deleted: true, RoomTrackID: roomTrackID})
 }
 
 func (h *Handler) SkipTrack(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +64,7 @@ func (h *Handler) MarkPlaying(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, map[string]any{"updated": true, "room_track_id": roomTrackID, "status": track.StatusPlaying})
+	middleware.WriteJSON(w, http.StatusOK, dto.TrackActionResponse{Updated: true, RoomTrackID: roomTrackID, Status: track.StatusPlaying})
 }
 
 func (h *Handler) MarkPlayed(w http.ResponseWriter, r *http.Request) {
@@ -81,15 +81,15 @@ func (h *Handler) setTrackLifecycle(w http.ResponseWriter, r *http.Request, stat
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, map[string]any{"updated": true, "room_track_id": roomTrackID, "status": status})
+	middleware.WriteJSON(w, http.StatusOK, dto.TrackActionResponse{Updated: true, RoomTrackID: roomTrackID, Status: status})
 }
 
 func roomAndTrackID(r *http.Request) (uuid.UUID, uuid.UUID, error) {
-	roomID, err := uuid.Parse(r.PathValue("roomID"))
+	roomID, err := middleware.ParseID(r.PathValue("roomID"), "room")
 	if err != nil {
 		return uuid.Nil, uuid.Nil, err
 	}
-	roomTrackID, err := uuid.Parse(r.PathValue("roomTrackID"))
+	roomTrackID, err := middleware.ParseID(r.PathValue("roomTrackID"), "room track")
 	if err != nil {
 		return uuid.Nil, uuid.Nil, err
 	}

@@ -3,13 +3,13 @@ package middleware
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"crowdbeats/internal/infra/http/dto"
 	"crowdbeats/pkg/apierror"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func WriteJSON(w http.ResponseWriter, status int, data any) {
@@ -39,22 +39,10 @@ func writeError(w http.ResponseWriter, err error) {
 		})
 		return
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(dto.Envelope{
-			Data: nil,
-			Error: &dto.APIError{
-				Code:    pgErr.Code,
-				Message: pgErr.Message,
-			},
-			Meta: map[string]any{},
-		})
-		return
-	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, apierror.New("NOT_FOUND", "resource not found", http.StatusNotFound))
 		return
 	}
-	writeError(w, apierror.New("INTERNAL_ERROR", err.Error(), http.StatusInternalServerError))
+	log.Printf("HTTP internal error: %v", err)
+	writeError(w, apierror.New("INTERNAL_ERROR", "an internal error occurred", http.StatusInternalServerError))
 }

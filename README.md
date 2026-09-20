@@ -3,6 +3,7 @@
 Backend Go du MVP Crowd Beats.
 
 Crowd Beats est une app type “Crowd DJ” :
+
 - les utilisateurs rejoignent une room via QR code
 - proposent des musiques Spotify
 - votent pour influencer la queue
@@ -135,6 +136,7 @@ make test-unit
 ```
 
 Couvrent des cas ciblés :
+
 - vote refusé si déjà voté
 - proposition de track déjà active dans une room
 - join par QR invalide
@@ -144,6 +146,7 @@ Couvrent des cas ciblés :
 Ils sont inclus dans `make test-unit` et utilisent `net/http/httptest`.
 
 Cas couverts :
+
 - health endpoint
 - route protégée sans bearer token
 - création de room via router/handler
@@ -157,6 +160,7 @@ make test-integration
 ```
 
 Ils valident notamment :
+
 - création / lecture d’une room
 - création / lecture d’une session
 - contrainte d’unicité des votes
@@ -167,6 +171,7 @@ Les tests d’intégration nécessitent `TEST_DATABASE_URL`. En local, le plus s
 ## Docker
 
 Le `Dockerfile` est multi-stage :
+
 - build du binaire Go
 - image runtime Alpine légère
 - copie des migrations nécessaires au démarrage
@@ -184,6 +189,7 @@ make docker-build
 Workflow : [.github/workflows/ci.yml](/home/chef/Dev/Crowd-Beats-API/.github/workflows/ci.yml)
 
 À chaque PR / push :
+
 - téléchargement des dépendances
 - tests unitaires
 - tests d’intégration avec PostgreSQL via `services`
@@ -195,6 +201,7 @@ Workflow : [.github/workflows/ci.yml](/home/chef/Dev/Crowd-Beats-API/.github/wor
 Workflow : [.github/workflows/cd.yml](/home/chef/Dev/Crowd-Beats-API/.github/workflows/cd.yml)
 
 Sur `main` :
+
 - build de l’image Docker
 - push sur GHCR
 

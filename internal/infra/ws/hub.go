@@ -3,7 +3,10 @@ package ws
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
+	"crowdbeats/internal/domain/queue"
+	"crowdbeats/internal/infra/http/dto"
 	"crowdbeats/internal/usecase"
 
 	"github.com/google/uuid"
@@ -71,11 +74,27 @@ func (r *Registry) hub(roomID uuid.UUID) *RoomHub {
 }
 
 func (r *Registry) Broadcast(event usecase.LiveEvent) {
+	payloadData := event.Payload
+	if event.Name == "queue_updated" {
+		payload, ok := event.Payload.(map[string]any)
+		if !ok {
+			return
+		}
+		items, ok := payload["items"].([]queue.Item)
+		if !ok {
+			return
+		}
+		updatedAt, ok := payload["updated_at"].(*time.Time)
+		if !ok {
+			return
+		}
+		payloadData = dto.QueueSnapshotFromDomain(items, updatedAt)
+	}
 	payload, err := json.Marshal(Event{
 		Event:     event.Name,
 		RoomID:    event.RoomID,
 		Timestamp: event.Timestamp,
-		Payload:   event.Payload,
+		Payload:   payloadData,
 	})
 	if err != nil {
 		return

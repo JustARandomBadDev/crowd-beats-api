@@ -10,51 +10,145 @@ import (
 	domainspotify "crowdbeats/internal/domain/spotify"
 	"crowdbeats/internal/domain/track"
 	"crowdbeats/internal/testutil"
+	"crowdbeats/pkg/apierror"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
-func TestProposeTrackReturnsDuplicateWhenTrackAlreadyActiveInRoom(t *testing.T) {
-	h := testutil.NewHarness()
-	roomID := uuid.New()
-	sessionID := uuid.New()
-	catalogID := uuid.New()
-	existingTrackID := uuid.New()
+const validTrackID = "0123456789ABCDEFGHIJKL"
 
+func proposeHarness(t *testing.T, limit, activeCount int) (*testutil.Harness, uuid.UUID, session.Session, uuid.UUID) {
+	t.Helper()
+	h := testutil.NewHarness()
+	roomID, catalogID := uuid.New(), uuid.New()
+	current := session.Session{ID: uuid.New(), RoomID: roomID, Status: session.StatusActive}
 	h.Repos.RoomRepo.GetByIDFn = func(context.Context, uuid.UUID) (room.Room, error) {
-		return room.Room{ID: roomID, Status: room.StatusActive, QueueLimit: 20}, nil
+		return room.Room{ID: roomID, Status: room.StatusActive, QueueLimit: limit}, nil
 	}
-	h.Repos.TrackRepo.CountActiveFn = func(context.Context, uuid.UUID) (int, error) {
-		return 1, nil
+	h.Repos.SessionRepo.GetByIDForUpdateFn = func(context.Context, uuid.UUID) (session.Session, error) {
+		return current, nil
 	}
 	h.Repos.SpotifyRepo.GetBySpotifyIDFn = func(context.Context, string) (string, domainspotify.Track, error) {
-		return catalogID.String(), domainspotify.Track{
-			SpotifyTrackID: "spotify:1",
-			Title:          "Hey Ya!",
-			ArtistNames:    "Outkast",
-		}, nil
+		return catalogID.String(), domainspotify.Track{SpotifyTrackID: validTrackID, Title: "Song"}, nil
 	}
-	h.Repos.TrackRepo.CreateQueuedFn = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (track.RoomTrack, error) {
-		return track.RoomTrack{}, &pgconn.PgError{Code: "23505", ConstraintName: "uq_room_tracks_active_unique_track"}
+	h.Repos.TrackRepo.CountActiveFn = func(context.Context, uuid.UUID) (int, error) {
+		return activeCount, nil
 	}
-	h.Repos.TrackRepo.GetActiveDuplicateFn = func(context.Context, uuid.UUID, uuid.UUID) (track.DuplicateInfo, error) {
-		position := 2
-		return track.DuplicateInfo{
-			ID:               existingTrackID,
-			CurrentVoteCount: 4,
-			Position:         &position,
-		}, nil
-	}
+	return h, roomID, current, catalogID
+}
 
-	resp, status, err := h.Services.ProposeTrack(context.Background(), roomID, session.Session{ID: sessionID}, "spotify:1")
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
-	require.Equal(t, true, resp["duplicate"])
+func requireProposeError(t *testing.T, err error, code string, status int) {
+	t.Helper()
+	var apiErr apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, code, apiErr.Code)
+	require.Equal(t, status, apiErr.Status)
+}
 
-	existing := resp["existing_room_track"].(map[string]any)
-	require.Equal(t, existingTrackID, existing["id"])
-	require.Equal(t, 4, existing["current_vote_count"])
-	require.Empty(t, h.Broadcaster.Events)
+func TestProposeTrackRejectsInvalidIDBeforeSpotify(t *testing.T) {
+	h := testutil.NewHarness()
+	called := false
+	h.Repos.SpotifyProvider.GetTrackFn = func(context.Context, string) (domainspotify.Track, error) {
+		called = true
+		return domainspotify.Track{}, nil
+	}
+	_, _, err := h.Services.ProposeTrack(context.Background(), uuid.New(), session.Session{}, "spotify:1")
+	requireProposeError(t, err, "INVALID_SPOTIFY_TRACK_ID", http.StatusBadRequest)
+	require.False(t, called)
+	for _, id := range []string{"", "0123456789ABCDEFGHIJK!", "0123456789ABCDEFGHIJK"} {
+		_, _, err := h.Services.ProposeTrack(context.Background(), uuid.New(), session.Session{}, id)
+		requireProposeError(t, err, "INVALID_SPOTIFY_TRACK_ID", http.StatusBadRequest)
+	}
+}
+
+func TestProposeTrackMissingFromSpotify(t *testing.T) {
+	h, roomID, current, _ := proposeHarness(t, 20, 0)
+	h.Repos.SpotifyRepo.GetBySpotifyIDFn = func(context.Context, string) (string, domainspotify.Track, error) {
+		return "", domainspotify.Track{}, pgx.ErrNoRows
+	}
+	h.Repos.SpotifyProvider.GetTrackFn = func(context.Context, string) (domainspotify.Track, error) {
+		return domainspotify.Track{}, &domainspotify.ProviderError{StatusCode: http.StatusNotFound}
+	}
+	_, _, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+	requireProposeError(t, err, "SPOTIFY_TRACK_NOT_FOUND", http.StatusNotFound)
+}
+
+func TestProposeTrackDuplicateBeforeQueueLimit(t *testing.T) {
+	for _, count := range []int{1, 20} {
+		h, roomID, current, _ := proposeHarness(t, 20, count)
+		existingID := uuid.New()
+		h.Repos.TrackRepo.GetActiveDuplicateFn = func(context.Context, uuid.UUID, uuid.UUID) (track.DuplicateInfo, error) {
+			return track.DuplicateInfo{ID: existingID, CurrentVoteCount: 4}, nil
+		}
+		h.Repos.TrackRepo.CountActiveFn = func(context.Context, uuid.UUID) (int, error) {
+			t.Fatal("queue count must follow duplicate check")
+			return 0, nil
+		}
+		response, status, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status)
+		require.True(t, response.Duplicate)
+		require.Equal(t, existingID, response.ExistingRoomTrack.ID)
+		require.Empty(t, h.Broadcaster.Events)
+	}
+}
+
+func TestProposeTrackRejectsNewTrackWhenQueueFull(t *testing.T) {
+	h, roomID, current, _ := proposeHarness(t, 20, 20)
+	_, _, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+	requireProposeError(t, err, "QUEUE_FULL", http.StatusConflict)
+}
+
+func TestProposeTrackRejectsSessionFromOtherRoom(t *testing.T) {
+	h, roomID, current, _ := proposeHarness(t, 20, 0)
+	current.RoomID = uuid.New()
+	_, _, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+	requireProposeError(t, err, "SESSION_NOT_IN_ROOM", http.StatusForbidden)
+}
+
+func TestProposeTrackRequiresActiveRoom(t *testing.T) {
+	for _, status := range []string{room.StatusDraft, room.StatusPaused, room.StatusClosed} {
+		h, roomID, current, _ := proposeHarness(t, 20, 0)
+		h.Repos.RoomRepo.GetByIDFn = func(context.Context, uuid.UUID) (room.Room, error) {
+			return room.Room{ID: roomID, Status: status, QueueLimit: 20}, nil
+		}
+		_, _, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+		requireProposeError(t, err, "ROOM_NOT_ACTIVE", http.StatusForbidden)
+	}
+}
+
+func TestProposeTrackCreatedAndConcurrentConflictResult(t *testing.T) {
+	for _, created := range []bool{true, false} {
+		h, roomID, current, _ := proposeHarness(t, 20, 0)
+		createdID := uuid.New()
+		h.Repos.TrackRepo.CreateQueuedIfAbsentFn = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (track.RoomTrack, bool, error) {
+			if created {
+				return track.RoomTrack{ID: createdID}, true, nil
+			}
+			return track.RoomTrack{}, false, nil
+		}
+		duplicateLookups := 0
+		h.Repos.TrackRepo.GetActiveDuplicateFn = func(context.Context, uuid.UUID, uuid.UUID) (track.DuplicateInfo, error) {
+			duplicateLookups++
+			if duplicateLookups == 1 {
+				return track.DuplicateInfo{}, pgx.ErrNoRows
+			}
+			// The second lookup represents the row inserted by a concurrent request.
+			return track.DuplicateInfo{ID: createdID}, nil
+		}
+		response, status, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+		require.NoError(t, err)
+		if created {
+			require.Equal(t, http.StatusCreated, status)
+			require.False(t, response.Duplicate)
+			require.Equal(t, createdID, response.RoomTrack.ID)
+		} else {
+			require.Equal(t, http.StatusOK, status)
+			require.True(t, response.Duplicate)
+			require.Equal(t, createdID, response.ExistingRoomTrack.ID)
+			require.Equal(t, 2, duplicateLookups)
+		}
+	}
 }

@@ -15,7 +15,7 @@ type QueueRepository struct{ q Querier }
 func (r *QueueRepository) Load(ctx context.Context, roomID uuid.UUID) ([]queue.Item, *time.Time, error) {
 	rows, err := r.q.Query(ctx, `
 		select rq.position, rq.room_track_id, rq.score, rq.vote_count, rq.fifo_order, st.spotify_track_id, st.title, st.artist_names,
-		       coalesce(st.album_name,''), coalesce(st.image_url,''), coalesce(st.preview_url,''), coalesce(st.uri,''),
+		       coalesce(st.album_name,''), coalesce(st.duration_ms,0), coalesce(st.image_url,''), coalesce(st.preview_url,''), coalesce(st.uri,''),
 		       us.nickname, rq.recalculated_at
 		from room_queue rq
 		join room_tracks rt on rt.id = rq.room_track_id
@@ -44,6 +44,7 @@ func (r *QueueRepository) Load(ctx context.Context, roomID uuid.UUID) ([]queue.I
 			&item.Title,
 			&item.ArtistNames,
 			&item.AlbumName,
+			&item.DurationMS,
 			&item.ImageURL,
 			&item.PreviewURL,
 			&item.URI,

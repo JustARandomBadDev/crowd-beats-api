@@ -1,40 +1,29 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"crowdbeats/internal/domain/room"
+	"crowdbeats/internal/infra/http/dto"
 	"crowdbeats/internal/infra/http/middleware"
+	"crowdbeats/internal/usecase"
 )
 
 func (h *Handler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name                  string  `json:"name"`
 		Slug                  *string `json:"slug"`
-		Status                string  `json:"status"`
-		QueueLimit            int     `json:"queue_limit"`
-		MaxVotesPerUser       int     `json:"max_votes_per_user"`
-		QRTTLSeconds          int     `json:"qr_ttl_seconds"`
-		RecalcIntervalSeconds int     `json:"recalc_interval_seconds"`
+		Status                *string `json:"status"`
+		QueueLimit            *int    `json:"queue_limit"`
+		MaxVotesPerUser       *int    `json:"max_votes_per_user"`
+		QRTTLSeconds          *int    `json:"qr_ttl_seconds"`
+		RecalcIntervalSeconds *int    `json:"recalc_interval_seconds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+	if err := middleware.DecodeJSON(r, &req, true); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
-	if req.Status == "" {
-		req.Status = room.StatusDraft
-	}
-	if req.QueueLimit == 0 {
-		req.QueueLimit = 20
-	}
-	if req.MaxVotesPerUser == 0 {
-		req.MaxVotesPerUser = 5
-	}
-	if req.QRTTLSeconds == 0 {
-		req.QRTTLSeconds = 14400
-	}
-	created, secret, err := h.Usecases.CreateRoom(r.Context(), room.CreateInput{
+	created, secret, err := h.Usecases.CreateRoom(r.Context(), usecase.CreateRoomInput{
 		Name:                  req.Name,
 		Slug:                  req.Slug,
 		Status:                req.Status,
@@ -47,27 +36,26 @@ func (h *Handler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusCreated, map[string]any{
-		"room":           created,
-		"manager_secret": secret,
+	middleware.WriteJSON(w, http.StatusCreated, dto.CreateRoomResponse{
+		Room: dto.RoomFromDomain(created), ManagerSecret: secret,
 	})
 }
 
 func (h *Handler) CreateQRCode(w http.ResponseWriter, r *http.Request) {
 	currentRoom := middleware.RoomFromContext(r.Context())
 	var req struct {
-		ExpiresInSeconds int `json:"expires_in_seconds"`
+		ExpiresInSeconds *int `json:"expires_in_seconds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+	if err := middleware.DecodeJSON(r, &req, true); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
-	qr, err := h.Usecases.CreateQRCode(r.Context(), currentRoom.ID, req.ExpiresInSeconds, currentRoom.QRTTLSeconds)
+	qr, err := h.Usecases.CreateQRCode(r.Context(), currentRoom.ID, req.ExpiresInSeconds)
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusCreated, qr)
+	middleware.WriteJSON(w, http.StatusCreated, dto.QRCodeFromDomain(qr))
 }
 
 func (h *Handler) PatchRoom(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +65,7 @@ func (h *Handler) PatchRoom(w http.ResponseWriter, r *http.Request) {
 		QueueLimit      *int    `json:"queue_limit"`
 		MaxVotesPerUser *int    `json:"max_votes_per_user"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+	if err := middleware.DecodeJSON(r, &req, true); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
@@ -90,7 +78,7 @@ func (h *Handler) PatchRoom(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, map[string]any{"room": updated})
+	middleware.WriteJSON(w, http.StatusOK, dto.RoomContainerResponse{Room: dto.RoomFromDomain(updated)})
 }
 
 func (h *Handler) ManagerStats(w http.ResponseWriter, r *http.Request) {
@@ -100,5 +88,5 @@ func (h *Handler) ManagerStats(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, stats)
+	middleware.WriteJSON(w, http.StatusOK, dto.RoomStatsFromDomain(stats))
 }

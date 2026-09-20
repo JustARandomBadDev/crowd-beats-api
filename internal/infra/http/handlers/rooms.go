@@ -1,16 +1,14 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
+	"crowdbeats/internal/infra/http/dto"
 	"crowdbeats/internal/infra/http/middleware"
-
-	"github.com/google/uuid"
 )
 
 func (h *Handler) GetRoom(w http.ResponseWriter, r *http.Request) {
-	roomID, err := uuid.Parse(r.PathValue("roomID"))
+	roomID, err := middleware.ParseID(r.PathValue("roomID"), "room")
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
@@ -20,7 +18,7 @@ func (h *Handler) GetRoom(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, current)
+	middleware.WriteJSON(w, http.StatusOK, dto.RoomFromDomain(current))
 }
 
 func (h *Handler) JoinByQR(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +27,7 @@ func (h *Handler) JoinByQR(w http.ResponseWriter, r *http.Request) {
 		Nickname     string `json:"nickname"`
 		SessionToken string `json:"session_token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := middleware.DecodeJSON(r, &req, false); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
@@ -38,18 +36,23 @@ func (h *Handler) JoinByQR(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, map[string]any{
-		"room":    result.Room,
-		"session": result.Session,
-		"ws": map[string]any{
-			"url": result.WebSocketURL,
+	middleware.WriteJSON(w, http.StatusOK, dto.JoinRoomResponse{
+		Room: dto.RoomFromDomain(result.Room),
+		Session: dto.JoinSessionResponse{
+			ID: result.Session.ID, Nickname: result.Session.Nickname,
+			Role: result.Session.Role, Token: result.Token,
 		},
+		WS: dto.WebSocketResponse{URL: result.WebSocketURL},
 	})
 }
 
 func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
-	roomID, err := uuid.Parse(r.PathValue("roomID"))
+	roomID, err := middleware.ParseID(r.PathValue("roomID"), "room")
 	if err != nil {
+		middleware.WriteError(w, err)
+		return
+	}
+	if _, err := h.Usecases.GetRoom(r.Context(), roomID); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
@@ -58,22 +61,5 @@ func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, map[string]any{
-		"items":      items,
-		"updated_at": updatedAt,
-	})
-}
-
-func (h *Handler) GetRoomStats(w http.ResponseWriter, r *http.Request) {
-	roomID, err := uuid.Parse(r.PathValue("roomID"))
-	if err != nil {
-		middleware.WriteError(w, err)
-		return
-	}
-	stats, err := h.Usecases.GetRoomStats(r.Context(), roomID)
-	if err != nil {
-		middleware.WriteError(w, err)
-		return
-	}
-	middleware.WriteJSON(w, http.StatusOK, stats)
+	middleware.WriteJSON(w, http.StatusOK, dto.QueueSnapshotFromDomain(items, updatedAt))
 }

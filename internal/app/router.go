@@ -21,7 +21,6 @@ func NewRouter(cfg Config, usecases *usecase.Services, registry *ws.Registry) ht
 	mux.HandleFunc("POST /api/v1/rooms/join-by-qr", h.JoinByQR)
 	mux.HandleFunc("GET  /api/v1/rooms/{roomID}", h.GetRoom)
 	mux.HandleFunc("GET  /api/v1/rooms/{roomID}/queue", h.GetQueue)
-	mux.HandleFunc("GET  /api/v1/rooms/{roomID}/stats", h.GetRoomStats)
 
 	mux.Handle("GET  /api/v1/spotify/search", middleware.RequireSession(usecases, http.HandlerFunc(h.SearchSpotify)))
 	mux.Handle("POST /api/v1/rooms/{roomID}/tracks", middleware.RequireSession(usecases, http.HandlerFunc(h.CreateTrack)))

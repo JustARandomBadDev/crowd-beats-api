@@ -8,9 +8,6 @@ import (
 	"crowdbeats/internal/domain/session"
 	"crowdbeats/internal/platform/auth"
 	"crowdbeats/internal/usecase"
-	"crowdbeats/pkg/apierror"
-
-	"github.com/google/uuid"
 )
 
 type contextKey string
@@ -33,9 +30,9 @@ func RequireSession(usecases *usecase.Services, next http.Handler) http.Handler 
 
 func RequireManager(usecases *usecase.Services, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		roomID, err := uuid.Parse(r.PathValue("roomID"))
+		roomID, err := ParseID(r.PathValue("roomID"), "room")
 		if err != nil {
-			writeError(w, apierror.New("INVALID_ROOM_ID", "invalid room id", http.StatusBadRequest))
+			writeError(w, err)
 			return
 		}
 		current, err := usecases.AuthenticateManager(r.Context(), roomID, r.Header.Get("X-Manager-Secret"))

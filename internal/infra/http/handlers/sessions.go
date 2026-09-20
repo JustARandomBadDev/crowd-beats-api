@@ -1,16 +1,18 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
+	"crowdbeats/internal/infra/http/dto"
 	"crowdbeats/internal/infra/http/middleware"
 
 	"github.com/google/uuid"
 )
 
 func (h *Handler) SessionMe(w http.ResponseWriter, r *http.Request) {
-	middleware.WriteJSON(w, http.StatusOK, map[string]any{"session": middleware.SessionFromContext(r.Context())})
+	middleware.WriteJSON(w, http.StatusOK, dto.SessionContainerResponse{
+		Session: dto.SessionFromDomain(middleware.SessionFromContext(r.Context())),
+	})
 }
 
 func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +20,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RoomID uuid.UUID `json:"room_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+	if err := middleware.DecodeJSON(r, &req, true); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}

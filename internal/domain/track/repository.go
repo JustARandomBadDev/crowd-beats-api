@@ -9,6 +9,7 @@ import (
 type Repository interface {
 	CountActive(ctx context.Context, roomID uuid.UUID) (int, error)
 	CreateQueued(ctx context.Context, roomID uuid.UUID, spotifyTrackRefID uuid.UUID, sessionID uuid.UUID) (RoomTrack, error)
+	CreateQueuedIfAbsent(ctx context.Context, roomID uuid.UUID, spotifyTrackRefID uuid.UUID, sessionID uuid.UUID) (RoomTrack, bool, error)
 	GetActiveDuplicate(ctx context.Context, roomID uuid.UUID, spotifyTrackRefID uuid.UUID) (DuplicateInfo, error)
 	GetByIDForUpdate(ctx context.Context, roomTrackID uuid.UUID) (RoomTrack, error)
 	Delete(ctx context.Context, roomID, roomTrackID uuid.UUID) (bool, error)

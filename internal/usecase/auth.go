@@ -34,7 +34,7 @@ func (s *Services) AuthenticateManager(ctx context.Context, roomID uuid.UUID, se
 	current, err := s.Repos.Rooms().GetByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return room.Room{}, apierror.New("MANAGER_FORBIDDEN", "room not found", http.StatusForbidden)
+			return room.Room{}, apierror.New("NOT_FOUND", "room not found", http.StatusNotFound)
 		}
 		return room.Room{}, err
 	}

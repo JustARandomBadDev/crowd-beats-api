@@ -66,5 +66,5 @@ func TestRouterCreateRoomReturnsManagerSecret(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, rec.Code)
 	require.Contains(t, rec.Body.String(), `"manager_secret":"manager-secret"`)
-	require.Contains(t, rec.Body.String(), `"Name":"Le Neon"`)
+	require.Contains(t, rec.Body.String(), `"name":"Le Neon"`)
 }

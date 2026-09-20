@@ -9,6 +9,7 @@ import (
 	"crowdbeats/internal/domain/track"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type TrackRepository struct{ q Querier }
@@ -29,6 +30,22 @@ func (r *TrackRepository) CreateQueued(ctx context.Context, roomID uuid.UUID, sp
 		&out.ID, &out.RoomID, &out.SpotifyTrackRefID, &out.ProposedBySessionID, &out.Status, &out.VoteCountCached, &out.ScoreCached, &out.FIFOOrder, &out.ProposedAt,
 	)
 	return out, err
+}
+
+func (r *TrackRepository) CreateQueuedIfAbsent(ctx context.Context, roomID uuid.UUID, spotifyTrackRefID uuid.UUID, sessionID uuid.UUID) (track.RoomTrack, bool, error) {
+	var out track.RoomTrack
+	err := r.q.QueryRow(ctx, `
+		insert into room_tracks (room_id, spotify_track_ref_id, proposed_by_session_id)
+		values ($1, $2, $3)
+		on conflict (room_id, spotify_track_ref_id) where status in ('queued', 'playing') do nothing
+		returning id, room_id, spotify_track_ref_id, proposed_by_session_id, status, vote_count_cached, score_cached, fifo_order, proposed_at
+	`, roomID, spotifyTrackRefID, sessionID).Scan(
+		&out.ID, &out.RoomID, &out.SpotifyTrackRefID, &out.ProposedBySessionID, &out.Status, &out.VoteCountCached, &out.ScoreCached, &out.FIFOOrder, &out.ProposedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return track.RoomTrack{}, false, nil
+	}
+	return out, err == nil, err
 }
 
 func (r *TrackRepository) GetActiveDuplicate(ctx context.Context, roomID uuid.UUID, spotifyTrackRefID uuid.UUID) (track.DuplicateInfo, error) {
