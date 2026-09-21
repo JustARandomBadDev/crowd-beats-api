@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"time"
@@ -101,13 +100,4 @@ func queueFingerprint(items []queue.RankedItem, playing *queue.Item) (string, er
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// This legacy helper is kept for CODE-001, which is explicitly deferred.
-func nullableInt(v sql.NullInt32) *int {
-	if !v.Valid {
-		return nil
-	}
-	value := int(v.Int32)
-	return &value
 }

@@ -20,8 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests use testPool, which truncates its database. Compile them until
-// Prompt 5 provides an explicitly isolated TEST_DATABASE_URL.
 type integrationBroadcaster struct{}
 
 func (integrationBroadcaster) Broadcast(usecase.LiveEvent)            {}
@@ -105,6 +103,8 @@ func TestConcurrentVoteAndRecalculationsPreserveVoteCache(t *testing.T) {
 	guest := queueSession(t, repos, created.ID, 1)
 	trackID := queueTrack(t, pool, created.ID, guest.ID, 1)
 	services := queueServices(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	start := make(chan struct{})
 	errors := make(chan error, 3)
 	var group sync.WaitGroup
@@ -113,14 +113,14 @@ func TestConcurrentVoteAndRecalculationsPreserveVoteCache(t *testing.T) {
 		go func() {
 			defer group.Done()
 			<-start
-			_, err := services.RecalculateRoomQueue(context.Background(), created.ID)
+			_, err := services.RecalculateRoomQueue(ctx, created.ID)
 			errors <- err
 		}()
 	}
 	go func() {
 		defer group.Done()
 		<-start
-		_, err := services.AddVote(context.Background(), created.ID, guest, trackID)
+		_, err := services.AddVote(ctx, created.ID, guest, trackID)
 		errors <- err
 	}()
 	close(start)
@@ -148,6 +148,67 @@ func TestConcurrentVoteAndRecalculationsPreserveVoteCache(t *testing.T) {
 		select count(*) from (select position from room_queue where room_id = $1 group by position having count(*) > 1) p
 	`, created.ID).Scan(&duplicatePositions))
 	require.Zero(t, duplicatePositions)
+}
+
+func TestConcurrentRecalculationsProduceOneConsistentSnapshot(t *testing.T) {
+	pool := testPool(t)
+	repos := repositories.NewSet(pool)
+	created := integrationRoom(t, repos)
+	guest := queueSession(t, repos, created.ID, 1)
+	first := queueTrack(t, pool, created.ID, guest.ID, 1)
+	second := queueTrack(t, pool, created.ID, guest.ID, 2)
+	services := queueServices(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	type result struct {
+		changed bool
+		err     error
+	}
+	results := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			changed, err := services.RecalculateRoomQueue(ctx, created.ID)
+			results <- result{changed, err}
+		}()
+	}
+	close(start)
+	a, b := <-results, <-results
+	require.NoError(t, a.err)
+	require.NoError(t, b.err)
+	require.NotEqual(t, a.changed, b.changed, "second batch should observe committed fingerprint")
+	snapshot, err := repos.Queue().LoadSnapshot(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Items, 2)
+	require.Equal(t, first, snapshot.Items[0].RoomTrackID)
+	require.Equal(t, second, snapshot.Items[1].RoomTrackID)
+	require.Equal(t, 1, snapshot.Items[0].Position)
+	require.Equal(t, 2, snapshot.Items[1].Position)
+}
+
+func TestDeleteTrackCascadesVotesAndQueueEntry(t *testing.T) {
+	pool := testPool(t)
+	repos := repositories.NewSet(pool)
+	created := integrationRoom(t, repos)
+	guest := queueSession(t, repos, created.ID, 1)
+	trackID := queueTrack(t, pool, created.ID, guest.ID, 1)
+	require.NoError(t, repos.Votes().Insert(context.Background(), created.ID, trackID, guest.ID))
+	services := queueServices(pool)
+	_, err := services.RecalculateRoomQueue(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.NoError(t, services.DeleteTrack(context.Background(), created.ID, trackID))
+	var votes, queueRows int
+	require.NoError(t, pool.QueryRow(context.Background(), `select count(*) from votes where room_track_id = $1`, trackID).Scan(&votes))
+	require.NoError(t, pool.QueryRow(context.Background(), `select count(*) from room_queue where room_track_id = $1`, trackID).Scan(&queueRows))
+	require.Zero(t, votes)
+	require.Zero(t, queueRows)
+	changed, err := services.RecalculateRoomQueue(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.True(t, changed)
+	snapshot, err := repos.Queue().LoadSnapshot(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.Empty(t, snapshot.Items)
 }
 
 func TestConcurrentMarkPlayingLeavesOnePlayingTrack(t *testing.T) {

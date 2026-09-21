@@ -9,8 +9,8 @@ import (
 	"crowdbeats/internal/usecase"
 )
 
-func NewRouter(cfg Config, usecases *usecase.Services, registry *ws.Registry) http.Handler {
-	h := handlers.New(usecases)
+func NewRouter(cfg Config, usecases *usecase.Services, registry *ws.Registry, database handlers.DatabasePinger) http.Handler {
+	h := handlers.New(usecases, database)
 	wsHandler := ws.NewHandler(registry, usecases)
 
 	mux := http.NewServeMux()

@@ -102,16 +102,18 @@ func TestConcurrentQRRotationLeavesExactlyOneActiveCode(t *testing.T) {
 	pool := testPool(t)
 	store := db.NewStore(pool)
 	createdRoom := integrationRoom(t, repositories.NewSet(pool))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	for _, code := range []string{"qr_parallel_one", "qr_parallel_two"} {
 		go func(code string) {
 			<-start
-			results <- store.Run(context.Background(), func(repos usecase.RepositorySet) error {
-				if _, err := repos.Rooms().GetByIDForUpdate(context.Background(), createdRoom.ID); err != nil {
+			results <- store.Run(ctx, func(repos usecase.RepositorySet) error {
+				if _, err := repos.Rooms().GetByIDForUpdate(ctx, createdRoom.ID); err != nil {
 					return err
 				}
-				return repos.Rooms().RotateQRCode(context.Background(), createdRoom.ID, code, time.Now().Add(time.Hour))
+				return repos.Rooms().RotateQRCode(ctx, createdRoom.ID, code, time.Now().Add(time.Hour))
 			})
 		}(code)
 	}
@@ -130,6 +132,8 @@ func TestConcurrentTrackInsertReturnsCreatedAndDuplicateWithoutAbortingTransacti
 	pool := testPool(t)
 	repos := repositories.NewSet(pool)
 	roomID, sessionID, _, catalogID := seedRoomSessionAndCatalog(t, pool, repos)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	type outcome struct {
 		id      uuid.UUID
 		created bool
@@ -140,28 +144,28 @@ func TestConcurrentTrackInsertReturnsCreatedAndDuplicateWithoutAbortingTransacti
 	for i := 0; i < 2; i++ {
 		go func() {
 			<-start
-			tx, err := pool.Begin(context.Background())
+			tx, err := pool.Begin(ctx)
 			if err != nil {
 				results <- outcome{err: err}
 				return
 			}
 			defer tx.Rollback(context.Background())
 			locked := repositories.NewSet(tx)
-			inserted, created, err := locked.Tracks().CreateQueuedIfAbsent(context.Background(), roomID, catalogID, sessionID)
+			inserted, created, err := locked.Tracks().CreateQueuedIfAbsent(ctx, roomID, catalogID, sessionID)
 			if err != nil {
 				results <- outcome{err: err}
 				return
 			}
 			id := inserted.ID
 			if !created {
-				duplicate, err := locked.Tracks().GetActiveDuplicate(context.Background(), roomID, catalogID)
+				duplicate, err := locked.Tracks().GetActiveDuplicate(ctx, roomID, catalogID)
 				if err != nil {
 					results <- outcome{err: err}
 					return
 				}
 				id = duplicate.ID
 			}
-			err = tx.Commit(context.Background())
+			err = tx.Commit(ctx)
 			results <- outcome{id: id, created: created, err: err}
 		}()
 	}

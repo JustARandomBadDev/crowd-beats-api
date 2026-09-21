@@ -45,7 +45,7 @@ func NewApplication(cfg Config) (*Application, error) {
 	}, store.Spotify())
 	usecases := usecase.NewServices(store, store, spotifyClient, registry, searchCache, auth.NewTokenManager())
 
-	router := NewRouter(cfg, usecases, registry)
+	router := NewRouter(cfg, usecases, registry, pool)
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
 		Handler: router,

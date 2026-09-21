@@ -24,7 +24,7 @@ import (
 )
 
 func serveContractRequest(h *testutil.Harness, method, path, body, bearer string) *httptest.ResponseRecorder {
-	router := NewRouter(Config{AllowedOrigins: "*"}, h.Services, ws.NewRegistry())
+	router := NewRouter(Config{AllowedOrigins: "*"}, h.Services, ws.NewRegistry(), nil)
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
@@ -217,7 +217,7 @@ func TestCreateQRCodeForMissingRoomReturnsNotFound(t *testing.T) {
 	h.Repos.RoomRepo.GetByIDFn = func(context.Context, uuid.UUID) (room.Room, error) {
 		return room.Room{}, pgx.ErrNoRows
 	}
-	router := NewRouter(Config{AllowedOrigins: "*"}, h.Services, ws.NewRegistry())
+	router := NewRouter(Config{AllowedOrigins: "*"}, h.Services, ws.NewRegistry(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/manager/rooms/"+uuid.NewString()+"/qr-codes", strings.NewReader(`{}`))
 	req.Header.Set("X-Manager-Secret", "some-secret")
 	rec := httptest.NewRecorder()
@@ -253,7 +253,7 @@ func TestStatsOnlyAvailableOnManagerRoute(t *testing.T) {
 	h.Repos.RoomRepo.LoadStatsFn = func(context.Context, uuid.UUID) (room.Stats, error) {
 		return room.Stats{ActiveUsers: 2, TopTracks: []room.TopTrack{{Title: "Song", Votes: 3}}}, nil
 	}
-	router := NewRouter(Config{AllowedOrigins: "*"}, h.Services, ws.NewRegistry())
+	router := NewRouter(Config{AllowedOrigins: "*"}, h.Services, ws.NewRegistry(), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/manager/rooms/"+roomID.String()+"/stats", nil)
 	req.Header.Set("X-Manager-Secret", "manager-token")
 	rec := httptest.NewRecorder()

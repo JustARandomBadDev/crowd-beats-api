@@ -4,7 +4,9 @@ package repositories_test
 
 import (
 	"context"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"crowdbeats/internal/infra/db/repositories"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -23,8 +26,8 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
+	if err := validateIntegrationTarget(databaseURL, os.Getenv("DATABASE_URL"), os.Getenv("ALLOW_INTEGRATION_DB_RESET") == "true"); err != nil {
+		t.Fatal(err)
 	}
 
 	pool, err := db.NewPool(context.Background(), databaseURL)
@@ -33,7 +36,9 @@ func testPool(t *testing.T) *pgxpool.Pool {
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		err = pool.Ping(context.Background())
+		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err = pool.Ping(pingCtx)
+		cancel()
 		if err == nil {
 			break
 		}
@@ -43,13 +48,58 @@ func testPool(t *testing.T) *pgxpool.Pool {
 		time.Sleep(250 * time.Millisecond)
 	}
 
-	require.NoError(t, db.RunMigrations(context.Background(), pool))
-	_, err = pool.Exec(context.Background(), `
+	resetCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	require.NoError(t, db.RunMigrations(resetCtx, pool))
+	_, err = pool.Exec(resetCtx, `
 		truncate table room_events, room_queue, votes, room_tracks, spotify_tracks, user_sessions, room_qr_codes, rooms restart identity cascade;
 		alter sequence room_track_fifo_seq restart with 1;
 	`)
 	require.NoError(t, err)
 	return pool
+}
+
+// The integration suite runs migrations and TRUNCATE. Keep both guards even
+// when Compose or CI supplies a dedicated database.
+func validateIntegrationTarget(testURL, developmentURL string, allowReset bool) error {
+	if testURL == "" {
+		return errors.New("TEST_DATABASE_URL is required for integration tests")
+	}
+	if !allowReset {
+		return errors.New("ALLOW_INTEGRATION_DB_RESET=true is required for destructive integration tests")
+	}
+	if testURL == developmentURL {
+		return errors.New("TEST_DATABASE_URL must differ from DATABASE_URL")
+	}
+	config, err := pgx.ParseConfig(testURL)
+	if err != nil || !strings.Contains(strings.ToLower(config.Database), "test") {
+		return errors.New("TEST_DATABASE_URL must target a database whose name contains test")
+	}
+	return nil
+}
+
+func TestIntegrationTargetGuard(t *testing.T) {
+	valid := "postgres://test_user:test_password@localhost:55432/crowdbeats_test?sslmode=disable"
+	for _, tc := range []struct {
+		name, testURL, developmentURL string
+		allow                         bool
+		wantError                     bool
+	}{
+		{"missing URL", "", "", true, true},
+		{"missing acknowledgement", valid, "", false, true},
+		{"same as development", valid, valid, true, true},
+		{"non-test database", "postgres://test_user:test_password@localhost:5432/crowdbeats?sslmode=disable", "", true, true},
+		{"dedicated database", valid, "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateIntegrationTarget(tc.testURL, tc.developmentURL, tc.allow)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestRoomRepositoryCreateAndGetByID(t *testing.T) {
