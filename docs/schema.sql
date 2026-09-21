@@ -1,17 +1,8 @@
--- Crowd Beats MVP - PostgreSQL schema
--- Target: PostgreSQL 14+
--- Notes:
---   - UUID generation uses pgcrypto/gen_random_uuid()
---   - Queue ordering is materialized in room_queue and recalculated in batch by backend jobs
---   - Critical business rules are enforced both in SQL and in Go services
-
+-- Documentation mirror of migrations/001_init.sql; the migration is the runtime source of truth.
 begin;
 
 create extension if not exists pgcrypto;
 
--- -----------------------------------------------------------------------------
--- Updated-at trigger helper
--- -----------------------------------------------------------------------------
 create or replace function set_updated_at()
 returns trigger
 language plpgsql
@@ -22,14 +13,8 @@ begin
 end;
 $$;
 
--- -----------------------------------------------------------------------------
--- Sequences
--- -----------------------------------------------------------------------------
 create sequence if not exists room_track_fifo_seq as bigint;
 
--- -----------------------------------------------------------------------------
--- Core tables
--- -----------------------------------------------------------------------------
 create table if not exists rooms (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -141,7 +126,6 @@ create index if not exists idx_room_tracks_proposed_by
 create index if not exists idx_room_tracks_room_created_at
   on room_tracks(room_id, created_at desc);
 
--- Active duplicate prevention inside the same room
 create unique index if not exists uq_room_tracks_active_unique_track
   on room_tracks(room_id, spotify_track_ref_id)
   where status in ('queued', 'playing');
@@ -197,11 +181,6 @@ create index if not exists idx_room_events_room_created_at
 create index if not exists idx_room_events_event_type
   on room_events(event_type);
 
--- -----------------------------------------------------------------------------
--- Consistency triggers
--- -----------------------------------------------------------------------------
-
--- Ensure a proposed track belongs to the same room as its proposer session.
 create or replace function trg_room_tracks_validate_proposer_room()
 returns trigger
 language plpgsql
@@ -229,13 +208,13 @@ begin
 end;
 $$;
 
+drop trigger if exists room_tracks_validate_proposer_room on room_tracks;
 create trigger room_tracks_validate_proposer_room
 before insert or update of room_id, proposed_by_session_id
 on room_tracks
 for each row
 execute function trg_room_tracks_validate_proposer_room();
 
--- Ensure a vote is coherent: session.room_id == vote.room_id == room_track.room_id
 create or replace function trg_votes_validate_room_consistency()
 returns trigger
 language plpgsql
@@ -244,18 +223,12 @@ declare
   v_session_room_id uuid;
   v_track_room_id uuid;
 begin
-  select room_id into v_session_room_id
-  from user_sessions
-  where id = new.session_id;
-
+  select room_id into v_session_room_id from user_sessions where id = new.session_id;
   if v_session_room_id is null then
     raise exception 'session_id % does not exist', new.session_id;
   end if;
 
-  select room_id into v_track_room_id
-  from room_tracks
-  where id = new.room_track_id;
-
+  select room_id into v_track_room_id from room_tracks where id = new.room_track_id;
   if v_track_room_id is null then
     raise exception 'room_track_id % does not exist', new.room_track_id;
   end if;
@@ -263,18 +236,17 @@ begin
   if new.room_id <> v_session_room_id or new.room_id <> v_track_room_id then
     raise exception 'vote room mismatch between vote, session and track';
   end if;
-
   return new;
 end;
 $$;
 
+drop trigger if exists votes_validate_room_consistency on votes;
 create trigger votes_validate_room_consistency
 before insert or update of room_id, room_track_id, session_id
 on votes
 for each row
 execute function trg_votes_validate_room_consistency();
 
--- Keep lightweight vote counters in sync.
 create or replace function trg_votes_refresh_room_track_cache()
 returns trigger
 language plpgsql
@@ -293,83 +265,29 @@ begin
     where id = old.room_track_id;
     return old;
   end if;
-
   return null;
 end;
 $$;
 
+drop trigger if exists votes_after_insert_refresh_room_track_cache on votes;
 create trigger votes_after_insert_refresh_room_track_cache
 after insert on votes
 for each row
 execute function trg_votes_refresh_room_track_cache();
 
+drop trigger if exists votes_after_delete_refresh_room_track_cache on votes;
 create trigger votes_after_delete_refresh_room_track_cache
 after delete on votes
 for each row
 execute function trg_votes_refresh_room_track_cache();
 
--- updated_at triggers
-create trigger rooms_set_updated_at
-before update on rooms
-for each row
-execute function set_updated_at();
-
-create trigger user_sessions_set_updated_at
-before update on user_sessions
-for each row
-execute function set_updated_at();
-
-create trigger spotify_tracks_set_updated_at
-before update on spotify_tracks
-for each row
-execute function set_updated_at();
-
-create trigger room_tracks_set_updated_at
-before update on room_tracks
-for each row
-execute function set_updated_at();
-
--- -----------------------------------------------------------------------------
--- Views useful for the API / dashboard
--- -----------------------------------------------------------------------------
-
-create or replace view v_room_queue_expanded as
-select
-  rq.room_id,
-  rq.room_track_id,
-  rq.position,
-  rq.score,
-  rq.vote_count,
-  rq.fifo_order,
-  rq.recalculated_at,
-  rt.status as room_track_status,
-  rt.proposed_at,
-  st.spotify_track_id,
-  st.title,
-  st.artist_names,
-  st.album_name,
-  st.duration_ms,
-  st.image_url,
-  st.preview_url,
-  st.uri,
-  rt.proposed_by_session_id
-from room_queue rq
-join room_tracks rt on rt.id = rq.room_track_id
-join spotify_tracks st on st.id = rt.spotify_track_ref_id;
-
-create or replace view v_room_stats as
-select
-  r.id as room_id,
-  r.name,
-  count(distinct case when us.status = 'active' then us.id end) as active_users,
-  count(distinct case when rt.status in ('queued', 'playing') then rt.id end) as active_tracks,
-  count(v.id) as total_votes,
-  max(rq.recalculated_at) as last_queue_recalculated_at
-from rooms r
-left join user_sessions us on us.room_id = r.id
-left join room_tracks rt on rt.room_id = r.id
-left join votes v on v.room_id = r.id
-left join room_queue rq on rq.room_id = r.id
-group by r.id, r.name;
+drop trigger if exists rooms_set_updated_at on rooms;
+create trigger rooms_set_updated_at before update on rooms for each row execute function set_updated_at();
+drop trigger if exists user_sessions_set_updated_at on user_sessions;
+create trigger user_sessions_set_updated_at before update on user_sessions for each row execute function set_updated_at();
+drop trigger if exists spotify_tracks_set_updated_at on spotify_tracks;
+create trigger spotify_tracks_set_updated_at before update on spotify_tracks for each row execute function set_updated_at();
+drop trigger if exists room_tracks_set_updated_at on room_tracks;
+create trigger room_tracks_set_updated_at before update on room_tracks for each row execute function set_updated_at();
 
 commit;

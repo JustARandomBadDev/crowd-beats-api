@@ -1,256 +1,56 @@
-# Crowd Beats API
+# Crowd Beats
 
-Backend Go du MVP Crowd Beats.
+Backend Go du MVP « Crowd DJ » pour bars et clubs. Un client scanne un QR temporaire, rejoint une room sous pseudo, recherche des morceaux Spotify, propose et vote. Le gérant crée la room, renouvelle son QR, consulte la file et les statistiques, puis pilote manuellement son système audio. **Le backend ne lance pas la lecture Spotify.** Flutter est le client mobile prévu ; il ne se trouve pas dans ce dépôt.
 
-Crowd Beats est une app type “Crowd DJ” :
+Le MVP comprend des sessions anonymes persistantes, une file recalculée par batch et des événements WebSocket. Il n'inclut ni comptes utilisateur, ni IA, recommandations, gamification, lecture automatique, fournisseur musical supplémentaire ou broadcast WebSocket entre plusieurs instances API.
 
-- les utilisateurs rejoignent une room via QR code
-- proposent des musiques Spotify
-- votent pour influencer la queue
-- reçoivent des mises à jour live via WebSocket
-- le gérant crée les rooms, génère les QR codes, supprime ou skip des tracks et consulte les stats
+## Stack et fonctionnement
 
-Le projet suit une architecture de modular monolith documentée dans [docs/architecture.md](/home/chef/Dev/Crowd-Beats-API/docs/architecture.md), avec PostgreSQL comme source de vérité et une couche temps réel simple pour un MVP.
+Go 1.26, PostgreSQL 16 dans les configurations Docker, API HTTP JSON, WebSocket, Spotify API, Docker Compose et GitHub Actions. Les commandes passent par `handler → use case → repository → PostgreSQL`. La base est la source de vérité ; le registre WebSocket est en mémoire et suppose une instance API pour le temps réel.
 
-## Stack
+## Démarrage rapide
 
-- Go
-- PostgreSQL
-- WebSocket
-- Docker / Docker Compose
-- GitHub Actions
-- GHCR pour la publication d’image
-
-## Fonctionnalités principales
-
-- API HTTP JSON versionnée sous `/api/v1`
-- sessions anonymes persistées via bearer token opaque
-- création de room et génération de QR code manager
-- join room via QR code
-- recherche Spotify via API Spotify ou fallback catalogue local
-- proposition de track avec prévention des doublons actifs
-- système de votes avec quota et contrainte d’unicité
-- queue matérialisée en base, recalculée périodiquement
-- WebSocket room-scoped pour les événements live
-
-## Structure du projet
-
-```text
-cmd/api                point d’entrée binaire
-internal/app           bootstrap et router
-internal/domain        entités métier et interfaces repository
-internal/usecase       orchestration métier
-internal/infra         HTTP, PostgreSQL, WebSocket, scheduler, cache, client Spotify
-internal/platform      utilitaires transverses
-migrations             schéma PostgreSQL
-pkg/apierror           erreurs API partagées
-```
-
-## Prérequis
-
-- Go compatible avec `go.mod`
-- Docker + Docker Compose
-- PostgreSQL local si lancement sans Docker
-
-## Configuration
-
-Copier `.env.example` vers `.env` si tu veux piloter les commandes `make`.
-
-Variables principales :
-
-- `DATABASE_URL`
-- `TEST_DATABASE_URL`
-- `HTTP_ADDR`
-- `AUTO_MIGRATE`
-- `ALLOWED_ORIGINS`
-- `DEFAULT_RECALC_INTERVAL`
-- `SPOTIFY_CLIENT_ID`
-- `SPOTIFY_CLIENT_SECRET`
-
-Sans credentials Spotify, le backend reste exécutable mais la recherche Spotify ne renverra que les tracks déjà présentes dans le catalogue local.
-
-## Lancement local sans Docker
+Avec Docker et Docker Compose :
 
 ```bash
-cp .env.example .env
-make dev
+docker compose up -d --build
+curl http://localhost:8080/health/ready
 ```
 
-Ou manuellement :
+Compose démarre PostgreSQL et l'API, applique `migrations/001_init.sql` au démarrage (`AUTO_MIGRATE=true`) et expose l'API sur `localhost:8080`. `docker compose down` arrête les services ; le volume PostgreSQL est conservé. Les identifiants du Compose sont **locaux uniquement**.
+
+Pour lancer Go sur l'hôte avec le PostgreSQL du Compose :
 
 ```bash
-export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crowdbeats?sslmode=disable
-export AUTO_MIGRATE=true
+docker compose up -d postgres
+export DATABASE_URL='postgres://postgres:postgres@localhost:5432/crowdbeats?sslmode=disable'
 go run ./cmd/api
 ```
 
-## Lancement avec Docker Compose
+Go ne charge pas automatiquement `.env` : exporter les variables, ou utiliser le `Makefile` qui inclut ce fichier. Voir [configuration et tests](docs/development.md).
+
+## Contrat et documentation
+
+- [API REST et parcours Flutter](docs/api.md)
+- [Protocole WebSocket et reconnexion](docs/websocket.md)
+- [Architecture, transactions et scheduler](docs/architecture.md)
+- [Schéma PostgreSQL](docs/database.md)
+- [Développement, Docker, configuration et CI](docs/development.md)
+
+L'API métier est sous `/api/v1`. Le join remet un bearer token de session ; la création d'une room remet un secret gérant. Conserver ces secrets localement et ne jamais les commiter. Les réponses publiques utilisent une enveloppe `data/error/meta` et des champs `snake_case`.
+
+## Vérification rapide
 
 ```bash
-cp .env.example .env
-make up
+go build ./...
+go test ./...
+go vet ./...
+go test -race ./...
+docker build -t crowd-beats-api:local .
 ```
 
-Services exposés :
+Les tests PostgreSQL réinitialisent une **base dédiée**. Leur procédure et les deux garde-fous obligatoires sont dans [docs/development.md](docs/development.md). La CI exécute aussi ces tests et le build Docker. Le workflow de CD publie une image GHCR ; il ne déploie pas de fournisseur d'hébergement.
 
-- API: `http://localhost:8080`
-- PostgreSQL: `localhost:5432`
+## Limites du MVP
 
-Arrêt :
-
-```bash
-make down
-```
-
-Logs :
-
-```bash
-make logs
-```
-
-## Commandes utiles
-
-```bash
-make build
-make dev
-make test
-make test-unit
-make test-integration
-make fmt
-make tidy
-make docker-build
-make up
-make down
-```
-
-## Tests
-
-Le repo contient trois niveaux de tests.
-
-### Tests unitaires
-
-Lancés par défaut avec :
-
-```bash
-make test-unit
-```
-
-Couvrent des cas ciblés :
-
-- vote refusé si déjà voté
-- proposition de track déjà active dans une room
-- join par QR invalide
-
-### Tests HTTP
-
-Ils sont inclus dans `make test-unit` et utilisent `net/http/httptest`.
-
-Cas couverts :
-
-- health endpoint
-- route protégée sans bearer token
-- création de room via router/handler
-
-### Tests d’intégration PostgreSQL
-
-Ils sont taggés `integration` et utilisent une vraie base PostgreSQL.
-
-```bash
-make test-integration
-```
-
-Ils valident notamment :
-
-- création / lecture d’une room
-- création / lecture d’une session
-- contrainte d’unicité des votes
-- contrainte anti-doublon actif sur les tracks d’une room
-
-Les tests d’intégration nécessitent `TEST_DATABASE_URL`. En local, le plus simple est de démarrer PostgreSQL via `make up` puis de lancer `make test-integration`.
-
-## Docker
-
-Le `Dockerfile` est multi-stage :
-
-- build du binaire Go
-- image runtime Alpine légère
-- copie des migrations nécessaires au démarrage
-
-Build local :
-
-```bash
-make docker-build
-```
-
-## CI/CD
-
-### CI
-
-Workflow : [.github/workflows/ci.yml](/home/chef/Dev/Crowd-Beats-API/.github/workflows/ci.yml)
-
-À chaque PR / push :
-
-- téléchargement des dépendances
-- tests unitaires
-- tests d’intégration avec PostgreSQL via `services`
-- build Go
-- build Docker
-
-### CD
-
-Workflow : [.github/workflows/cd.yml](/home/chef/Dev/Crowd-Beats-API/.github/workflows/cd.yml)
-
-Sur `main` :
-
-- build de l’image Docker
-- push sur GHCR
-
-Image publiée :
-
-```text
-ghcr.io/<owner>/crowd-beats-api:latest
-ghcr.io/<owner>/crowd-beats-api:sha-...
-```
-
-## Déploiement MVP
-
-Le chemin le plus simple pour un MVP :
-
-1. utiliser l’image poussée sur GHCR
-2. la brancher sur un provider simple type Render, Fly.io ou Railway
-3. configurer les variables d’environnement suivantes :
-   - `DATABASE_URL`
-   - `AUTO_MIGRATE=true`
-   - `HTTP_ADDR=:8080`
-   - `ALLOWED_ORIGINS`
-   - `SPOTIFY_CLIENT_ID`
-   - `SPOTIFY_CLIENT_SECRET`
-
-La CD fournie pousse l’image. Le déploiement final côté provider reste volontairement simple et découplé du repo pour éviter de sur-ingénier le MVP.
-
-## Endpoints principaux
-
-- `GET /health/live`
-- `GET /health/ready`
-- `POST /api/v1/manager/rooms`
-- `POST /api/v1/manager/rooms/{roomId}/qr-codes`
-- `POST /api/v1/rooms/join-by-qr`
-- `GET /api/v1/spotify/search?q=...`
-- `POST /api/v1/rooms/{roomId}/tracks`
-- `POST /api/v1/rooms/{roomId}/votes`
-- `GET /api/v1/rooms/{roomId}/queue`
-- `GET /ws?room_id=<uuid>`
-
-## Auth
-
-- endpoints manager : header `X-Manager-Secret`
-- endpoints user : `Authorization: Bearer <session_token>`
-
-Le secret manager est renvoyé lors de la création d’une room. Le token utilisateur est renvoyé au join room via QR code.
-
-## Roadmap technique courte
-
-- compléter la couverture des usecases critiques
-- enrichir les tests d’intégration concurrence
-- brancher un vrai déploiement provider via secret ou hook GitHub Actions
-- améliorer la readiness en branchant explicitement le check DB/Spotify si nécessaire
+Le client récupère l'état après une perte WebSocket via `sync_required` puis `GET /queue` : il n'y a pas de replay. Le classement de la file suit les votes puis l'ordre FIFO lors du batch, pas à chaque vote. Le gérant reste responsable de la lecture réelle. Le document [roadmap.md](docs/roadmap.md) est un plan historique, pas le contrat de l'API actuelle.

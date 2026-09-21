@@ -1,5 +1,7 @@
 # Crowd Beats – Plan de développement MVP (Backend Go + Flutter)
 
+> Archive de planification initiale. Les routes, événements et choix techniques ci-dessous sont historiques et ne décrivent pas nécessairement le backend actuel. Pour le contrat en vigueur, voir [API REST](api.md), [WebSocket](websocket.md) et [architecture](architecture.md).
+
 ## 🎯 Objectif
 
 Livrer une V1 testable en conditions réelles (bar) avec :
