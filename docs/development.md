@@ -76,7 +76,7 @@ go test -count=1 -tags=integration ./...
 docker compose -f docker-compose.test.yml down
 ```
 
-Vérifier la cible de `TEST_DATABASE_URL` avant d'exporter le flag de reset. Le `Makefile` possède un raccourci historique `test-integration` dont le défaut de `TEST_DATABASE_URL` pointe sur `DATABASE_URL` ; utiliser la commande explicite ci-dessus. Le garde-fou du helper refusera cette cible si elle n'est pas dédiée. Les tests ne sont pas parallélisés entre eux car ils partagent une base réinitialisée ; certains tests lancent des goroutines pour vérifier la concurrence PostgreSQL.
+Vérifier la cible de `TEST_DATABASE_URL` avant d'exporter le flag de reset. `make test-integration` exige `TEST_DATABASE_URL` et `ALLOW_INTEGRATION_DB_RESET=true` dans l'environnement ou sur la ligne de commande, ignore le `.env` local pour cette cible et lance la même suite avec `-count=1` ; il ne reprend jamais `DATABASE_URL` comme valeur par défaut. Le helper Go vérifie aussi que la cible est une base de test distincte. Les tests ne sont pas parallélisés entre eux car ils partagent une base réinitialisée ; certains tests lancent des goroutines pour vérifier la concurrence PostgreSQL.
 
 ## Docker et CI
 

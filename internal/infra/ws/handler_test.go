@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,12 +51,39 @@ func TestHandshakeRejectsMissingTokenAndWrongRoomBeforeUpgrade(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	require.Equal(t, http.StatusUnauthorized, response.Code)
+	require.Equal(t, "unauthorized\n", response.Body.String())
 
 	request = httptest.NewRequest(http.MethodGet, "/ws?room_id="+uuid.NewString(), nil)
 	request.Header.Set("Authorization", "Bearer session-token")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	require.Equal(t, http.StatusForbidden, response.Code)
+}
+
+func TestHandshakeKeepsAuthenticationErrorsPrivate(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		repoError  error
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "unknown session", repoError: pgx.ErrNoRows, wantStatus: http.StatusUnauthorized, wantBody: "unauthorized\n"},
+		{name: "database failure", repoError: errors.New("postgres connection refused: secret detail"), wantStatus: http.StatusInternalServerError, wantBody: "internal server error\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := testutil.NewHarness()
+			h.Repos.SessionRepo.GetByTokenHashFn = func(context.Context, string) (session.Session, error) {
+				return session.Session{}, tc.repoError
+			}
+			handler := NewHandler(NewRegistry(), h.Services)
+			request := httptest.NewRequest(http.MethodGet, "/ws?room_id="+uuid.NewString(), nil)
+			request.Header.Set("Authorization", "Bearer session-token")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			require.Equal(t, tc.wantStatus, response.Code)
+			require.Equal(t, tc.wantBody, response.Body.String())
+		})
+	}
 }
 
 func TestConnectionPolicyBounds(t *testing.T) {

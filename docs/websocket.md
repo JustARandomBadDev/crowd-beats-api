@@ -1,6 +1,6 @@
 # Protocole WebSocket
 
-Endpoint : `GET /ws?room_id=<uuid>` avec `Authorization: Bearer <session_token>`. Le token provient de `POST /api/v1/rooms/join-by-qr`. Avant l'upgrade, le serveur vérifie que la session existe, est `active` et appartient au `room_id` demandé ; il revérifie la session après enregistrement pour couvrir un switch concurrent. Un bearer invalide n'ouvre pas de socket. Les erreurs de handshake sont des réponses HTTP simples (401, 400 ou 403), **sans enveloppe REST**.
+Endpoint : `GET /ws?room_id=<uuid>` avec `Authorization: Bearer <session_token>`. Le token provient de `POST /api/v1/rooms/join-by-qr`. Avant l'upgrade, le serveur vérifie que la session existe, est `active` et appartient au `room_id` demandé ; il revérifie la session après enregistrement pour couvrir un switch concurrent. Un bearer invalide n'ouvre pas de socket. Les erreurs de handshake sont des réponses HTTP simples (401 pour une session invalide, 400 pour un `room_id` invalide, 403 pour une autre room, 500 pour une erreur d'authentification interne), **sans enveloppe REST**. Le corps d'une erreur d'authentification reste générique et n'expose aucun détail de la base de données.
 
 Le WebSocket transporte principalement des messages **serveur → client**. Les commandes métier restent des requêtes REST. Le registre et ses hubs par room vivent en mémoire dans un seul processus API ; il n'y a ni replay, ni abonnement dynamique, ni broadcast entre replicas.
 

@@ -1,4 +1,4 @@
--- init migration sourced from docs/schema.sql
+-- Runtime initialization migration; docs/schema.sql mirrors this SQL.
 begin;
 
 create extension if not exists pgcrypto;
