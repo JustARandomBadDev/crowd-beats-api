@@ -2,6 +2,7 @@ package usecase_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"crowdbeats/internal/domain/room"
 	"crowdbeats/internal/domain/session"
 	"crowdbeats/internal/testutil"
+	"crowdbeats/internal/usecase"
 	"crowdbeats/pkg/apierror"
 
 	"github.com/google/uuid"
@@ -122,6 +124,16 @@ func TestJoinByQRCodeSwitchesRoomWithoutChangingOldSession(t *testing.T) {
 	oldRoomID, newRoomID := uuid.New(), uuid.New()
 	oldID, newID := uuid.New(), uuid.New()
 	h := joinHarness(room.Room{ID: newRoomID, Status: room.StatusActive})
+	uow := &commitTrackingUOW{repos: h.Repos}
+	h.Services.UOW = uow
+	h.Broadcaster.DisconnectFn = func(roomID, sessionID uuid.UUID) {
+		require.True(t, uow.committed, "old sockets must close only after switch commit")
+		require.Equal(t, oldRoomID, roomID)
+		require.Equal(t, oldID, sessionID)
+	}
+	h.Broadcaster.BroadcastFn = func(usecase.LiveEvent) {
+		require.True(t, uow.committed, "presence and join events must follow commit")
+	}
 	old := session.Session{ID: oldID, RoomID: oldRoomID, Status: session.StatusActive, Nickname: "Old"}
 	h.Repos.SessionRepo.GetByTokenHashForUpdateFn = func(context.Context, string) (session.Session, error) {
 		return old, nil
@@ -145,7 +157,26 @@ func TestJoinByQRCodeSwitchesRoomWithoutChangingOldSession(t *testing.T) {
 	require.Equal(t, oldRoomID, old.RoomID)
 	require.Equal(t, "Old", old.Nickname)
 	require.True(t, left)
+	require.Equal(t, []struct{ RoomID, SessionID uuid.UUID }{{oldRoomID, oldID}}, h.Broadcaster.Disconnected)
 	require.Len(t, h.Broadcaster.Events, 3) // join and presence for both rooms
+}
+
+func TestJoinByQRCodeSwitchRollbackDoesNotDisconnectOldSocket(t *testing.T) {
+	oldRoomID, newRoomID := uuid.New(), uuid.New()
+	h := joinHarness(room.Room{ID: newRoomID, Status: room.StatusActive})
+	h.Repos.SessionRepo.GetByTokenHashForUpdateFn = func(context.Context, string) (session.Session, error) {
+		return session.Session{ID: uuid.New(), RoomID: oldRoomID, Status: session.StatusActive}, nil
+	}
+	h.Repos.SessionRepo.CreateFn = func(_ context.Context, input session.CreateInput) (session.Session, error) {
+		return session.Session{ID: uuid.New(), RoomID: input.RoomID, Status: session.StatusActive}, nil
+	}
+	h.Repos.EventRepo.InsertFn = func(context.Context, uuid.UUID, string, map[string]any) error {
+		return errors.New("transaction failed")
+	}
+	_, err := h.Services.JoinByQRCode(context.Background(), "qr_valid", "New", knownSessionToken)
+	require.Error(t, err)
+	require.Empty(t, h.Broadcaster.Disconnected)
+	require.Empty(t, h.Broadcaster.Events)
 }
 
 func TestJoinByQRCodeRequiresActiveRoomEvenWithExistingSession(t *testing.T) {

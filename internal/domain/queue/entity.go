@@ -28,4 +28,16 @@ type RankedItem struct {
 	RoomTrackID uuid.UUID
 	VoteCount   int
 	FIFOOrder   int64
+	ProposedBy  *string
+}
+
+type Snapshot struct {
+	Items      []Item
+	NowPlaying *Item
+	UpdatedAt  *time.Time
+}
+
+type SnapshotState struct {
+	Fingerprint string
+	UpdatedAt   *time.Time
 }

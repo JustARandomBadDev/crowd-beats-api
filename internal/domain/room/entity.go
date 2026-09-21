@@ -54,3 +54,8 @@ type Stats struct {
 	VotesCount    int
 	TopTracks     []TopTrack
 }
+
+type ScheduleEntry struct {
+	ID                    uuid.UUID
+	RecalcIntervalSeconds int
+}

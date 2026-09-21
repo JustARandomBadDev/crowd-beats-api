@@ -51,7 +51,7 @@ func (h *Handler) DeleteTrack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) SkipTrack(w http.ResponseWriter, r *http.Request) {
-	h.setTrackLifecycle(w, r, track.StatusSkipped, "track_skipped", "skipped_at", true)
+	h.setTrackLifecycle(w, r, track.StatusSkipped, "track_skipped", "skipped_at")
 }
 
 func (h *Handler) MarkPlaying(w http.ResponseWriter, r *http.Request) {
@@ -68,16 +68,16 @@ func (h *Handler) MarkPlaying(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) MarkPlayed(w http.ResponseWriter, r *http.Request) {
-	h.setTrackLifecycle(w, r, track.StatusPlayed, "track_played", "played_at", true)
+	h.setTrackLifecycle(w, r, track.StatusPlayed, "track_played", "played_at")
 }
 
-func (h *Handler) setTrackLifecycle(w http.ResponseWriter, r *http.Request, status, eventName, tsColumn string, recalcNow bool) {
+func (h *Handler) setTrackLifecycle(w http.ResponseWriter, r *http.Request, status, eventName, tsColumn string) {
 	roomID, roomTrackID, err := roomAndTrackID(r)
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
-	if err := h.Usecases.SetTrackStatus(r.Context(), roomID, roomTrackID, status, eventName, tsColumn, recalcNow); err != nil {
+	if err := h.Usecases.SetTrackStatus(r.Context(), roomID, roomTrackID, status, eventName, tsColumn); err != nil {
 		middleware.WriteError(w, err)
 		return
 	}

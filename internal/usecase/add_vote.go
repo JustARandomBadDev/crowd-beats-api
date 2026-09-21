@@ -83,18 +83,15 @@ func (s *Services) AddVote(ctx context.Context, roomID uuid.UUID, current sessio
 			CurrentVoteCount: currentVoteCount,
 			VotesRemaining:   targetRoom.MaxVotesPerUser - usedVotes - 1,
 		}
-		s.DirtyRooms.Mark(roomID)
-		s.Broadcaster.Broadcast(LiveEvent{
-			Name:      "vote_received",
-			RoomID:    roomID,
-			Timestamp: s.Now(),
-			Payload: map[string]any{
-				"room_track_id":      roomTrackID,
-				"current_vote_count": currentVoteCount,
-				"votes_remaining":    targetRoom.MaxVotesPerUser - usedVotes - 1,
-			},
-		})
 		return nil
 	})
+	if err == nil {
+		s.Broadcaster.Broadcast(LiveEvent{
+			Name: "vote_received", RoomID: roomID, Timestamp: s.Now(),
+			Payload: map[string]any{
+				"room_track_id": roomTrackID, "current_vote_count": response.CurrentVoteCount,
+			},
+		})
+	}
 	return response, err
 }

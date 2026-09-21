@@ -45,36 +45,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &Client{conn: conn, send: make(chan []byte, 32)}
-	hub := h.registry.hub(roomID)
-	hub.register <- client
-
-	go func() {
-		defer func() {
-			hub.unregister <- client
-			conn.Close()
-		}()
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				return
-			}
-		}
-	}()
-	go func() {
-		for msg := range client.send {
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
-			}
-		}
-	}()
-
-	h.registry.Broadcast(usecase.LiveEvent{
-		Name:      "room_joined",
-		RoomID:    roomID,
-		Timestamp: h.usecases.Now(),
-		Payload: map[string]any{
-			"session_id": current.ID,
-			"nickname":   current.Nickname,
-		},
-	})
+	client := newClient(conn, roomID, current.ID, 32)
+	h.registry.RegisterPending(roomID, client)
+	// A room switch may commit between the first auth check and registration.
+	// Pending clients receive no broadcasts until this second check succeeds.
+	confirmed, err := h.usecases.AuthenticateSession(r.Context(), auth.BearerToken(r.Header.Get("Authorization")))
+	if err != nil || confirmed.ID != current.ID || confirmed.RoomID != roomID {
+		h.registry.Unregister(roomID, client)
+		return
+	}
+	if !h.registry.Activate(roomID, client) {
+		return
+	}
+	go client.readPump(h.registry)
+	go client.writePump(h.registry)
 }

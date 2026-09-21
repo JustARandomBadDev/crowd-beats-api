@@ -34,6 +34,7 @@ type UnitOfWork interface {
 
 type Broadcaster interface {
 	Broadcast(event LiveEvent)
+	DisconnectSession(roomID, sessionID uuid.UUID)
 }
 
 type LiveEvent struct {
@@ -41,12 +42,6 @@ type LiveEvent struct {
 	RoomID    uuid.UUID
 	Timestamp time.Time
 	Payload   any
-}
-
-type DirtyTracker interface {
-	Mark(roomID uuid.UUID)
-	Clear(roomID uuid.UUID)
-	List() []uuid.UUID
 }
 
 type SearchCache interface {
@@ -64,7 +59,6 @@ type Services struct {
 	Repos           RepositorySet
 	SpotifyProvider spotify.Provider
 	Broadcaster     Broadcaster
-	DirtyRooms      DirtyTracker
 	SearchCache     SearchCache
 	Tokens          TokenManager
 	Now             func() time.Time
@@ -75,7 +69,6 @@ func NewServices(
 	repos RepositorySet,
 	spotifyProvider spotify.Provider,
 	broadcaster Broadcaster,
-	dirty DirtyTracker,
 	searchCache SearchCache,
 	tokens TokenManager,
 ) *Services {
@@ -84,7 +77,6 @@ func NewServices(
 		Repos:           repos,
 		SpotifyProvider: spotifyProvider,
 		Broadcaster:     broadcaster,
-		DirtyRooms:      dirty,
 		SearchCache:     searchCache,
 		Tokens:          tokens,
 		Now: func() time.Time {

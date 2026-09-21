@@ -131,9 +131,6 @@ func (s *Services) PatchRoom(ctx context.Context, roomID uuid.UUID, patch room.P
 		return room.Room{}, validationError("max_votes_per_user must be between 1 and 20")
 	}
 	updated, err := s.Repos.Rooms().Patch(ctx, roomID, patch)
-	if err == nil {
-		s.DirtyRooms.Mark(roomID)
-	}
 	return updated, err
 }
 

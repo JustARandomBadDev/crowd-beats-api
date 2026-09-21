@@ -154,24 +154,45 @@ func QueueItemsFromDomain(items []queue.Item) []QueueItemResponse {
 		result = append(result, QueueItemResponse{
 			Position: item.Position, RoomTrackID: item.RoomTrackID,
 			Score: item.Score, VoteCount: item.VoteCount, ProposedBy: item.ProposedBy,
-			Track: SpotifyTrackResponse{
-				SpotifyTrackID: item.SpotifyTrackID, Title: item.Title,
-				ArtistNames: item.ArtistNames, AlbumName: item.AlbumName,
-				DurationMS: item.DurationMS, ImageURL: item.ImageURL,
-				PreviewURL: item.PreviewURL, URI: item.URI,
-			},
+			Track: spotifyTrackFromQueueItem(item),
 		})
 	}
 	return result
 }
 
-type QueueSnapshotResponse struct {
-	Items     []QueueItemResponse `json:"items"`
-	UpdatedAt *time.Time          `json:"updated_at"`
+type NowPlayingResponse struct {
+	RoomTrackID uuid.UUID            `json:"room_track_id"`
+	VoteCount   int                  `json:"vote_count"`
+	Track       SpotifyTrackResponse `json:"track"`
+	ProposedBy  *string              `json:"proposed_by"`
 }
 
-func QueueSnapshotFromDomain(items []queue.Item, updatedAt *time.Time) QueueSnapshotResponse {
-	return QueueSnapshotResponse{Items: QueueItemsFromDomain(items), UpdatedAt: updatedAt}
+func spotifyTrackFromQueueItem(item queue.Item) SpotifyTrackResponse {
+	return SpotifyTrackResponse{
+		SpotifyTrackID: item.SpotifyTrackID, Title: item.Title,
+		ArtistNames: item.ArtistNames, AlbumName: item.AlbumName,
+		DurationMS: item.DurationMS, ImageURL: item.ImageURL,
+		PreviewURL: item.PreviewURL, URI: item.URI,
+	}
+}
+
+type QueueSnapshotResponse struct {
+	Items      []QueueItemResponse `json:"items"`
+	NowPlaying *NowPlayingResponse `json:"now_playing"`
+	UpdatedAt  *time.Time          `json:"updated_at"`
+}
+
+func QueueSnapshotFromDomain(snapshot queue.Snapshot) QueueSnapshotResponse {
+	result := QueueSnapshotResponse{Items: QueueItemsFromDomain(snapshot.Items), UpdatedAt: snapshot.UpdatedAt}
+	if snapshot.NowPlaying != nil {
+		result.NowPlaying = &NowPlayingResponse{
+			RoomTrackID: snapshot.NowPlaying.RoomTrackID,
+			VoteCount:   snapshot.NowPlaying.VoteCount,
+			Track:       spotifyTrackFromQueueItem(*snapshot.NowPlaying),
+			ProposedBy:  snapshot.NowPlaying.ProposedBy,
+		}
+	}
+	return result
 }
 
 type ProposedRoomTrackResponse struct {

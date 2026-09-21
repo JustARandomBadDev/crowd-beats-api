@@ -10,6 +10,7 @@ import (
 	domainspotify "crowdbeats/internal/domain/spotify"
 	"crowdbeats/internal/domain/track"
 	"crowdbeats/internal/testutil"
+	"crowdbeats/internal/usecase"
 	"crowdbeats/pkg/apierror"
 
 	"github.com/google/uuid"
@@ -19,7 +20,7 @@ import (
 
 const validTrackID = "0123456789ABCDEFGHIJKL"
 
-func proposeHarness(t *testing.T, limit, activeCount int) (*testutil.Harness, uuid.UUID, session.Session, uuid.UUID) {
+func proposeHarness(t *testing.T, limit, queuedCount int) (*testutil.Harness, uuid.UUID, session.Session, uuid.UUID) {
 	t.Helper()
 	h := testutil.NewHarness()
 	roomID, catalogID := uuid.New(), uuid.New()
@@ -33,8 +34,8 @@ func proposeHarness(t *testing.T, limit, activeCount int) (*testutil.Harness, uu
 	h.Repos.SpotifyRepo.GetBySpotifyIDFn = func(context.Context, string) (string, domainspotify.Track, error) {
 		return catalogID.String(), domainspotify.Track{SpotifyTrackID: validTrackID, Title: "Song"}, nil
 	}
-	h.Repos.TrackRepo.CountActiveFn = func(context.Context, uuid.UUID) (int, error) {
-		return activeCount, nil
+	h.Repos.TrackRepo.CountQueuedFn = func(context.Context, uuid.UUID) (int, error) {
+		return queuedCount, nil
 	}
 	return h, roomID, current, catalogID
 }
@@ -82,7 +83,7 @@ func TestProposeTrackDuplicateBeforeQueueLimit(t *testing.T) {
 		h.Repos.TrackRepo.GetActiveDuplicateFn = func(context.Context, uuid.UUID, uuid.UUID) (track.DuplicateInfo, error) {
 			return track.DuplicateInfo{ID: existingID, CurrentVoteCount: 4}, nil
 		}
-		h.Repos.TrackRepo.CountActiveFn = func(context.Context, uuid.UUID) (int, error) {
+		h.Repos.TrackRepo.CountQueuedFn = func(context.Context, uuid.UUID) (int, error) {
 			t.Fatal("queue count must follow duplicate check")
 			return 0, nil
 		}
@@ -99,6 +100,48 @@ func TestProposeTrackRejectsNewTrackWhenQueueFull(t *testing.T) {
 	h, roomID, current, _ := proposeHarness(t, 20, 20)
 	_, _, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
 	requireProposeError(t, err, "QUEUE_FULL", http.StatusConflict)
+}
+
+func TestProposeTrackPlayingDoesNotConsumeQueueSlotButRemainsDuplicate(t *testing.T) {
+	roomTrackID := uuid.New()
+	h, roomID, current, _ := proposeHarness(t, 2, 1) // one playing + one queued
+	h.Repos.TrackRepo.CreateQueuedIfAbsentFn = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (track.RoomTrack, bool, error) {
+		return track.RoomTrack{ID: roomTrackID, Status: track.StatusQueued}, true, nil
+	}
+	response, status, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, status)
+	require.Equal(t, roomTrackID, response.RoomTrack.ID)
+
+	h, roomID, current, _ = proposeHarness(t, 2, 2) // one playing + two queued
+	_, _, err = h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+	requireProposeError(t, err, "QUEUE_FULL", http.StatusConflict)
+
+	h.Repos.TrackRepo.GetActiveDuplicateFn = func(context.Context, uuid.UUID, uuid.UUID) (track.DuplicateInfo, error) {
+		return track.DuplicateInfo{ID: roomTrackID}, nil // playing remains active for deduplication
+	}
+	response, status, err = h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.True(t, response.Duplicate)
+	require.Equal(t, roomTrackID, response.ExistingRoomTrack.ID)
+}
+
+func TestProposeTrackBroadcastsOnlyAfterCommit(t *testing.T) {
+	h, roomID, current, _ := proposeHarness(t, 2, 0)
+	uow := &commitTrackingUOW{repos: h.Repos}
+	h.Services.UOW = uow
+	h.Repos.TrackRepo.CreateQueuedIfAbsentFn = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (track.RoomTrack, bool, error) {
+		return track.RoomTrack{ID: uuid.New()}, true, nil
+	}
+	h.Broadcaster.BroadcastFn = func(event usecase.LiveEvent) {
+		require.True(t, uow.committed)
+		require.Equal(t, "track_proposed", event.Name)
+	}
+	_, status, err := h.Services.ProposeTrack(context.Background(), roomID, current, validTrackID)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, status)
+	require.Len(t, h.Broadcaster.Events, 1)
 }
 
 func TestProposeTrackRejectsSessionFromOtherRoom(t *testing.T) {

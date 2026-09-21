@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 
 	"crowdbeats/internal/domain/session"
@@ -29,7 +30,11 @@ func (s *Services) Leave(ctx context.Context, current session.Session) error {
 	if err := s.Repos.Sessions().Leave(ctx, current.ID); err != nil {
 		return err
 	}
-	return s.BroadcastPresence(ctx, current.RoomID)
+	s.Broadcaster.DisconnectSession(current.RoomID, current.ID)
+	if err := s.BroadcastPresence(ctx, current.RoomID); err != nil {
+		log.Printf("broadcast presence after leave: %v", err)
+	}
+	return nil
 }
 
 func (s *Services) BroadcastPresence(ctx context.Context, roomID uuid.UUID) error {

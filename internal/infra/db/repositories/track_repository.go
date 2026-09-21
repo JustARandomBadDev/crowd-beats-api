@@ -14,9 +14,9 @@ import (
 
 type TrackRepository struct{ q Querier }
 
-func (r *TrackRepository) CountActive(ctx context.Context, roomID uuid.UUID) (int, error) {
+func (r *TrackRepository) CountQueued(ctx context.Context, roomID uuid.UUID) (int, error) {
 	var count int
-	err := r.q.QueryRow(ctx, `select count(*) from room_tracks where room_id = $1 and status in ('queued','playing')`, roomID).Scan(&count)
+	err := r.q.QueryRow(ctx, `select count(*) from room_tracks where room_id = $1 and status = 'queued'`, roomID).Scan(&count)
 	return count, err
 }
 
@@ -101,7 +101,7 @@ func (r *TrackRepository) UpdateCachedScores(ctx context.Context, roomID uuid.UU
 	ids := make([]uuid.UUID, 0, len(ranked))
 	for roomTrackID, score := range ranked {
 		ids = append(ids, roomTrackID)
-		if _, err := r.q.Exec(ctx, `update room_tracks set vote_count_cached = $2, score_cached = $2 where id = $1`, roomTrackID, score); err != nil {
+		if _, err := r.q.Exec(ctx, `update room_tracks set score_cached = $2 where id = $1`, roomTrackID, score); err != nil {
 			return err
 		}
 	}

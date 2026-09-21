@@ -46,6 +46,34 @@ func (r *RoomRepository) GetByIDForUpdate(ctx context.Context, roomID uuid.UUID)
 	return out, err
 }
 
+func (r *RoomRepository) GetByIDForShare(ctx context.Context, roomID uuid.UUID) (room.Room, error) {
+	var out room.Room
+	err := r.q.QueryRow(ctx, `
+		select id, name, slug, status, queue_limit, max_votes_per_user, qr_ttl_seconds, recalc_interval_seconds, manager_secret_hash, created_at, updated_at
+		from rooms where id = $1 for share
+	`, roomID).Scan(
+		&out.ID, &out.Name, &out.Slug, &out.Status, &out.QueueLimit, &out.MaxVotesPerUser, &out.QRTTLSeconds, &out.RecalcIntervalSeconds, &out.ManagerSecretHash, &out.CreatedAt, &out.UpdatedAt,
+	)
+	return out, err
+}
+
+func (r *RoomRepository) ListSchedulable(ctx context.Context) ([]room.ScheduleEntry, error) {
+	rows, err := r.q.Query(ctx, `select id, recalc_interval_seconds from rooms where status <> 'closed'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := make([]room.ScheduleEntry, 0)
+	for rows.Next() {
+		var entry room.ScheduleEntry
+		if err := rows.Scan(&entry.ID, &entry.RecalcIntervalSeconds); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
 func (r *RoomRepository) GetByQRCode(ctx context.Context, code string) (room.Room, error) {
 	var out room.Room
 	err := r.q.QueryRow(ctx, `
@@ -90,7 +118,7 @@ func (r *RoomRepository) LoadStats(ctx context.Context, roomID uuid.UUID) (room.
 	if err := r.q.QueryRow(ctx, `
 		select
 			(select count(*) from user_sessions where room_id = $1 and status = 'active' and last_seen_at >= now() - ($2::int * interval '1 second')),
-			(select count(*) from room_tracks where room_id = $1 and status in ('queued','playing')),
+			(select count(*) from room_tracks where room_id = $1 and status = 'queued'),
 			(select count(*) from votes where room_id = $1)
 	`, roomID, session.PresenceWindowSeconds).Scan(&stats.ActiveUsers, &stats.TracksInQueue, &stats.VotesCount); err != nil {
 		return stats, err

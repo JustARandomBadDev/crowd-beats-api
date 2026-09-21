@@ -119,6 +119,7 @@ func TestQueueDistinguishesExistingEmptyRoomFromMissingRoom(t *testing.T) {
 	rec := serveContractRequest(h, http.MethodGet, path, "", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, []any{}, contractData(t, rec)["items"])
+	require.Nil(t, contractData(t, rec)["now_playing"])
 	require.Nil(t, contractData(t, rec)["updated_at"])
 
 	missing := serveContractRequest(h, http.MethodGet, "/api/v1/rooms/"+uuid.NewString()+"/queue", "", "")

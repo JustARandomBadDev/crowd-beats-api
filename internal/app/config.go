@@ -8,32 +8,30 @@ import (
 )
 
 type Config struct {
-	HTTPAddr         string
-	DatabaseURL      string
-	AllowedOrigins   string
-	AutoMigrate      bool
-	ShutdownTimeout  time.Duration
-	SearchCacheTTL   time.Duration
-	SpotifyClientID  string
-	SpotifySecret    string
-	SpotifyTokenURL  string
-	SpotifyAPIBase   string
-	DefaultRoomEvery time.Duration
+	HTTPAddr        string
+	DatabaseURL     string
+	AllowedOrigins  string
+	AutoMigrate     bool
+	ShutdownTimeout time.Duration
+	SearchCacheTTL  time.Duration
+	SpotifyClientID string
+	SpotifySecret   string
+	SpotifyTokenURL string
+	SpotifyAPIBase  string
 }
 
 func MustLoadConfig() Config {
 	cfg := Config{
-		HTTPAddr:         envOr("HTTP_ADDR", ":8080"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		AllowedOrigins:   envOr("ALLOWED_ORIGINS", "*"),
-		AutoMigrate:      envBool("AUTO_MIGRATE", true),
-		ShutdownTimeout:  envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
-		SearchCacheTTL:   envDuration("SEARCH_CACHE_TTL", 30*time.Second),
-		SpotifyClientID:  os.Getenv("SPOTIFY_CLIENT_ID"),
-		SpotifySecret:    os.Getenv("SPOTIFY_CLIENT_SECRET"),
-		SpotifyTokenURL:  envOr("SPOTIFY_TOKEN_URL", "https://accounts.spotify.com/api/token"),
-		SpotifyAPIBase:   envOr("SPOTIFY_API_BASE", "https://api.spotify.com/v1"),
-		DefaultRoomEvery: envDuration("DEFAULT_RECALC_INTERVAL", 5*time.Second),
+		HTTPAddr:        envOr("HTTP_ADDR", ":8080"),
+		DatabaseURL:     os.Getenv("DATABASE_URL"),
+		AllowedOrigins:  envOr("ALLOWED_ORIGINS", "*"),
+		AutoMigrate:     envBool("AUTO_MIGRATE", true),
+		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		SearchCacheTTL:  envDuration("SEARCH_CACHE_TTL", 30*time.Second),
+		SpotifyClientID: os.Getenv("SPOTIFY_CLIENT_ID"),
+		SpotifySecret:   os.Getenv("SPOTIFY_CLIENT_SECRET"),
+		SpotifyTokenURL: envOr("SPOTIFY_TOKEN_URL", "https://accounts.spotify.com/api/token"),
+		SpotifyAPIBase:  envOr("SPOTIFY_API_BASE", "https://api.spotify.com/v1"),
 	}
 	if cfg.DatabaseURL == "" {
 		log.Fatal("DATABASE_URL is required")

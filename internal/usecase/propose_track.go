@@ -28,6 +28,7 @@ type ProposeTrackResult struct {
 
 func (s *Services) ProposeTrack(ctx context.Context, roomID uuid.UUID, current session.Session, spotifyTrackID string) (ProposeTrackResult, int, error) {
 	var response ProposeTrackResult
+	var eventPayload map[string]any
 	status := http.StatusCreated
 	if !validSpotifyTrackID(spotifyTrackID) {
 		return response, status, apierror.New("INVALID_SPOTIFY_TRACK_ID", "invalid Spotify track ID", http.StatusBadRequest)
@@ -90,11 +91,11 @@ func (s *Services) ProposeTrack(ctx context.Context, roomID uuid.UUID, current s
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		activeCount, err := repos.Tracks().CountActive(ctx, roomID)
+		queuedCount, err := repos.Tracks().CountQueued(ctx, roomID)
 		if err != nil {
 			return err
 		}
-		if activeCount >= targetRoom.QueueLimit {
+		if queuedCount >= targetRoom.QueueLimit {
 			return apierror.New("QUEUE_FULL", "queue is full", http.StatusConflict)
 		}
 
@@ -123,20 +124,17 @@ func (s *Services) ProposeTrack(ctx context.Context, roomID uuid.UUID, current s
 
 		response = ProposeTrackResult{RoomTrack: &ProposedRoomTrack{ID: proposed.ID, Status: track.StatusQueued}}
 
-		s.DirtyRooms.Mark(roomID)
-		s.Broadcaster.Broadcast(LiveEvent{
-			Name:      "track_proposed",
-			RoomID:    roomID,
-			Timestamp: s.Now(),
-			Payload: map[string]any{
-				"room_track_id":    proposed.ID,
-				"spotify_track_id": catalogTrack.SpotifyTrackID,
-				"title":            catalogTrack.Title,
-				"artist_names":     catalogTrack.ArtistNames,
-			},
-		})
+		eventPayload = map[string]any{
+			"room_track_id": proposed.ID, "spotify_track_id": catalogTrack.SpotifyTrackID,
+			"title": catalogTrack.Title, "artist_names": catalogTrack.ArtistNames,
+		}
 		return nil
 	})
+	if err == nil && eventPayload != nil {
+		s.Broadcaster.Broadcast(LiveEvent{
+			Name: "track_proposed", RoomID: roomID, Timestamp: s.Now(), Payload: eventPayload,
+		})
+	}
 	return response, status, err
 }
 

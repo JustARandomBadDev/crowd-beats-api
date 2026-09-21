@@ -52,14 +52,10 @@ func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, err)
 		return
 	}
-	if _, err := h.Usecases.GetRoom(r.Context(), roomID); err != nil {
-		middleware.WriteError(w, err)
-		return
-	}
-	items, updatedAt, err := h.Usecases.GetQueue(r.Context(), roomID)
+	snapshot, err := h.Usecases.GetQueue(r.Context(), roomID)
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, dto.QueueSnapshotFromDomain(items, updatedAt))
+	middleware.WriteJSON(w, http.StatusOK, dto.QueueSnapshotFromDomain(snapshot))
 }

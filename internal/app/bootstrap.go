@@ -35,7 +35,6 @@ func NewApplication(cfg Config) (*Application, error) {
 	}
 
 	store := db.NewStore(pool)
-	dirtyRooms := cache.NewDirtyRooms()
 	searchCache := cache.NewSearchCache(cfg.SearchCacheTTL)
 	registry := ws.NewRegistry()
 	spotifyClient := spotifyinfra.NewClient(spotifyinfra.Config{
@@ -44,14 +43,14 @@ func NewApplication(cfg Config) (*Application, error) {
 		TokenURL: cfg.SpotifyTokenURL,
 		APIBase:  cfg.SpotifyAPIBase,
 	}, store.Spotify())
-	usecases := usecase.NewServices(store, store, spotifyClient, registry, dirtyRooms, searchCache, auth.NewTokenManager())
+	usecases := usecase.NewServices(store, store, spotifyClient, registry, searchCache, auth.NewTokenManager())
 
 	router := NewRouter(cfg, usecases, registry)
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
 		Handler: router,
 	}
-	worker := scheduler.NewQueueRecalculator(cfg.DefaultRoomEvery, usecases)
+	worker := scheduler.NewQueueRecalculator(usecases)
 	worker.Start()
 
 	return &Application{

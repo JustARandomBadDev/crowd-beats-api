@@ -19,7 +19,6 @@ import (
 type Harness struct {
 	Repos       *FakeRepos
 	Broadcaster *Broadcaster
-	Dirty       *DirtyTracker
 	Tokens      *TokenManager
 	Services    *usecase.Services
 }
@@ -27,7 +26,6 @@ type Harness struct {
 func NewHarness() *Harness {
 	repos := NewFakeRepos()
 	broadcaster := &Broadcaster{}
-	dirty := &DirtyTracker{}
 	tokens := &TokenManager{
 		NewTokenValue: "test-token",
 	}
@@ -36,7 +34,6 @@ func NewHarness() *Harness {
 		repos,
 		repos.SpotifyProvider,
 		broadcaster,
-		dirty,
 		&SearchCache{},
 		tokens,
 	)
@@ -44,7 +41,6 @@ func NewHarness() *Harness {
 	return &Harness{
 		Repos:       repos,
 		Broadcaster: broadcaster,
-		Dirty:       dirty,
 		Tokens:      tokens,
 		Services:    services,
 	}
@@ -91,24 +87,25 @@ func (u *UnitOfWork) Run(ctx context.Context, fn func(repos usecase.RepositorySe
 }
 
 type Broadcaster struct {
-	Events []usecase.LiveEvent
+	Events       []usecase.LiveEvent
+	Disconnected []struct{ RoomID, SessionID uuid.UUID }
+	BroadcastFn  func(usecase.LiveEvent)
+	DisconnectFn func(uuid.UUID, uuid.UUID)
 }
 
 func (b *Broadcaster) Broadcast(event usecase.LiveEvent) {
+	if b.BroadcastFn != nil {
+		b.BroadcastFn(event)
+	}
 	b.Events = append(b.Events, event)
 }
 
-type DirtyTracker struct {
-	Marked []uuid.UUID
+func (b *Broadcaster) DisconnectSession(roomID, sessionID uuid.UUID) {
+	if b.DisconnectFn != nil {
+		b.DisconnectFn(roomID, sessionID)
+	}
+	b.Disconnected = append(b.Disconnected, struct{ RoomID, SessionID uuid.UUID }{roomID, sessionID})
 }
-
-func (d *DirtyTracker) Mark(roomID uuid.UUID) {
-	d.Marked = append(d.Marked, roomID)
-}
-
-func (d *DirtyTracker) Clear(roomID uuid.UUID) {}
-
-func (d *DirtyTracker) List() []uuid.UUID { return nil }
 
 type SearchCache struct {
 	Items map[string][]domainspotify.Track
@@ -153,6 +150,8 @@ type RoomRepo struct {
 	CreateFn           func(context.Context, room.CreateInput) (room.Room, error)
 	GetByIDFn          func(context.Context, uuid.UUID) (room.Room, error)
 	GetByIDForUpdateFn func(context.Context, uuid.UUID) (room.Room, error)
+	GetByIDForShareFn  func(context.Context, uuid.UUID) (room.Room, error)
+	ListSchedulableFn  func(context.Context) ([]room.ScheduleEntry, error)
 	GetByQRCodeFn      func(context.Context, string) (room.Room, error)
 	RotateQRCodeFn     func(context.Context, uuid.UUID, string, time.Time) error
 	PatchFn            func(context.Context, uuid.UUID, room.Patch) (room.Room, error)
@@ -179,6 +178,20 @@ func (r *RoomRepo) GetByIDForUpdate(ctx context.Context, roomID uuid.UUID) (room
 		return r.GetByIDForUpdateFn(ctx, roomID)
 	}
 	return r.GetByID(ctx, roomID)
+}
+
+func (r *RoomRepo) GetByIDForShare(ctx context.Context, roomID uuid.UUID) (room.Room, error) {
+	if r.GetByIDForShareFn != nil {
+		return r.GetByIDForShareFn(ctx, roomID)
+	}
+	return r.GetByID(ctx, roomID)
+}
+
+func (r *RoomRepo) ListSchedulable(ctx context.Context) ([]room.ScheduleEntry, error) {
+	if r.ListSchedulableFn == nil {
+		return nil, nil
+	}
+	return r.ListSchedulableFn(ctx)
 }
 
 func (r *RoomRepo) GetByQRCode(ctx context.Context, code string) (room.Room, error) {
@@ -322,7 +335,7 @@ func (p *SpotifyProvider) GetTrack(ctx context.Context, spotifyTrackID string) (
 }
 
 type TrackRepo struct {
-	CountActiveFn          func(context.Context, uuid.UUID) (int, error)
+	CountQueuedFn          func(context.Context, uuid.UUID) (int, error)
 	CreateQueuedFn         func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (track.RoomTrack, error)
 	CreateQueuedIfAbsentFn func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (track.RoomTrack, bool, error)
 	GetActiveDuplicateFn   func(context.Context, uuid.UUID, uuid.UUID) (track.DuplicateInfo, error)
@@ -333,11 +346,11 @@ type TrackRepo struct {
 	UpdateCachedScoresFn   func(context.Context, uuid.UUID, map[uuid.UUID]int) error
 }
 
-func (r *TrackRepo) CountActive(ctx context.Context, roomID uuid.UUID) (int, error) {
-	if r.CountActiveFn == nil {
+func (r *TrackRepo) CountQueued(ctx context.Context, roomID uuid.UUID) (int, error) {
+	if r.CountQueuedFn == nil {
 		return 0, nil
 	}
-	return r.CountActiveFn(ctx, roomID)
+	return r.CountQueuedFn(ctx, roomID)
 }
 
 func (r *TrackRepo) CreateQueued(ctx context.Context, roomID uuid.UUID, spotifyTrackRefID uuid.UUID, sessionID uuid.UUID) (track.RoomTrack, error) {
@@ -399,15 +412,39 @@ func (r *TrackRepo) UpdateCachedScores(ctx context.Context, roomID uuid.UUID, ra
 
 type QueueRepo struct {
 	LoadFn             func(context.Context, uuid.UUID) ([]queue.Item, *time.Time, error)
+	LoadSnapshotFn     func(context.Context, uuid.UUID) (queue.Snapshot, error)
+	LoadStateFn        func(context.Context, uuid.UUID) (queue.SnapshotState, error)
+	LoadNowPlayingFn   func(context.Context, uuid.UUID) (*queue.Item, error)
 	ListRankedQueuedFn func(context.Context, uuid.UUID, int) ([]queue.RankedItem, error)
 	ReplaceFn          func(context.Context, uuid.UUID, []queue.RankedItem, time.Time) error
 }
 
-func (r *QueueRepo) Load(ctx context.Context, roomID uuid.UUID) ([]queue.Item, *time.Time, error) {
-	if r.LoadFn == nil {
-		return nil, nil, nil
+func (r *QueueRepo) LoadSnapshot(ctx context.Context, roomID uuid.UUID) (queue.Snapshot, error) {
+	if r.LoadSnapshotFn != nil {
+		return r.LoadSnapshotFn(ctx, roomID)
 	}
-	return r.LoadFn(ctx, roomID)
+	if r.LoadFn != nil {
+		items, updatedAt, err := r.LoadFn(ctx, roomID)
+		if err != nil {
+			return queue.Snapshot{}, err
+		}
+		return queue.Snapshot{Items: items, UpdatedAt: updatedAt}, nil
+	}
+	return queue.Snapshot{Items: []queue.Item{}}, nil
+}
+
+func (r *QueueRepo) LoadState(ctx context.Context, roomID uuid.UUID) (queue.SnapshotState, error) {
+	if r.LoadStateFn == nil {
+		return queue.SnapshotState{}, nil
+	}
+	return r.LoadStateFn(ctx, roomID)
+}
+
+func (r *QueueRepo) LoadNowPlaying(ctx context.Context, roomID uuid.UUID) (*queue.Item, error) {
+	if r.LoadNowPlayingFn == nil {
+		return nil, nil
+	}
+	return r.LoadNowPlayingFn(ctx, roomID)
 }
 
 func (r *QueueRepo) ListRankedQueued(ctx context.Context, roomID uuid.UUID, limit int) ([]queue.RankedItem, error) {

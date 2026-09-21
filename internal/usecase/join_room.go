@@ -30,6 +30,7 @@ func (s *Services) JoinByQRCode(ctx context.Context, qrCode, nickname, existingT
 		return result, validationError("nickname must contain between 1 and 32 characters")
 	}
 	var oldRoomID uuid.UUID
+	var oldSessionID uuid.UUID
 	err := s.UOW.Run(ctx, func(repos RepositorySet) error {
 		targetRoom, err := repos.Rooms().GetByQRCode(ctx, qrCode)
 		if err != nil {
@@ -75,6 +76,7 @@ func (s *Services) JoinByQRCode(ctx context.Context, qrCode, nickname, existingT
 					return err
 				}
 				oldRoomID = current.RoomID
+				oldSessionID = current.ID
 			}
 			newToken, err := s.Tokens.NewToken(32)
 			if err != nil {
@@ -104,6 +106,9 @@ func (s *Services) JoinByQRCode(ctx context.Context, qrCode, nickname, existingT
 	})
 	if err != nil {
 		return JoinRoomResult{}, err
+	}
+	if oldSessionID != uuid.Nil {
+		s.Broadcaster.DisconnectSession(oldRoomID, oldSessionID)
 	}
 
 	roomID := result.Room.ID

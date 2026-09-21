@@ -2,6 +2,7 @@ package usecase_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -43,4 +44,28 @@ func TestHeartbeatCannotReactivateLeftSessionAfterConcurrentSwitch(t *testing.T)
 	require.ErrorAs(t, err, &apiErr)
 	require.Equal(t, "UNAUTHORIZED", apiErr.Code)
 	require.Equal(t, http.StatusUnauthorized, apiErr.Status)
+}
+
+func TestLeaveClosesSessionSocketsOnlyAfterPersistence(t *testing.T) {
+	h := testutil.NewHarness()
+	roomID, sessionID := uuid.New(), uuid.New()
+	left := false
+	h.Repos.SessionRepo.LeaveFn = func(context.Context, uuid.UUID) error {
+		left = true
+		return nil
+	}
+	h.Broadcaster.DisconnectFn = func(actualRoom, actualSession uuid.UUID) {
+		require.True(t, left)
+		require.Equal(t, roomID, actualRoom)
+		require.Equal(t, sessionID, actualSession)
+	}
+	require.NoError(t, h.Services.Leave(context.Background(), session.Session{ID: sessionID, RoomID: roomID}))
+	require.Len(t, h.Broadcaster.Disconnected, 1)
+	require.Equal(t, "presence_updated", h.Broadcaster.Events[0].Name)
+
+	h = testutil.NewHarness()
+	h.Repos.SessionRepo.LeaveFn = func(context.Context, uuid.UUID) error { return errors.New("DB failed") }
+	require.Error(t, h.Services.Leave(context.Background(), session.Session{ID: sessionID, RoomID: roomID}))
+	require.Empty(t, h.Broadcaster.Disconnected)
+	require.Empty(t, h.Broadcaster.Events)
 }
