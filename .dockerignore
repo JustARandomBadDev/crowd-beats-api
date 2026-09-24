@@ -1,0 +1,10 @@
+.git
+.github
+.codex
+.env
+api
+tmp
+coverage.*
+*.out
+*.test
+docs
